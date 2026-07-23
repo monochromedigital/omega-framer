@@ -20,6 +20,7 @@
  */
 
 import { connect } from "framer-api"
+import { transform, splitPriceNote, slugify } from "../shared/transform.js"
 
 // ─── Config: match these to your Framer collection & field names ────────────
 const CONFIG = {
@@ -88,68 +89,8 @@ async function fetchOmegaMenu() {
 }
 
 // ─── Step 3: transform ──────────────────────────────────────────────────────
-
-const slugify = (text, id) =>
-    (
-        String(text)
-            .toLowerCase()
-            .normalize("NFD")
-            .replace(/[\u0300-\u036f]/g, "") // strip accents (Château → chateau)
-            .replace(/[^a-z0-9]+/g, "-")
-            .replace(/^-+|-+$/g, "")
-            .slice(0, 60) || "item"
-    ) + `-${id}` // Omega ID suffix guarantees uniqueness (duplicate wine names exist)
-
-const clean = (s) => (typeof s === "string" ? s.replace(/\s+/g, " ").trim() : "")
-
-/** Descriptions like "Aust 45 $/Braz 34 $\nTenderloin, wedges" carry dual pricing
- *  on the first line when PRICE is null. Split it out into a price note. */
-function splitPriceNote(item) {
-    const raw = item.ITEMDESCRIPTION || ""
-    if (item.PRICE == null && raw.includes("\n")) {
-        const [first, ...rest] = raw.split("\n")
-        if (/\d/.test(first) && /\$/.test(first)) {
-            return { description: clean(rest.join(" ")), priceNote: clean(first) }
-        }
-    }
-    return { description: clean(raw), priceNote: "" }
-}
-
-function transform(data) {
-    const categoryName = new Map(data.categories.map((c) => [c.CATEGORYID, clean(c.CATEGORYNAME)]))
-    const sections = []
-    const items = []
-
-    data.menu.forEach((section, sIdx) => {
-        const catId = section.CATEGORYID?.[0] ?? section.groups?.[0]?.CATEGORYID ?? 1
-        sections.push({
-            omegaId: section.ID,
-            title: clean(section.DESCRIPTION), // DESCRIPTION is the clean EN label
-            slug: slugify(section.DESCRIPTION, section.ID),
-            category: categoryName.get(catId) || "Food",
-            comment: clean(section.MENU_COMMENT || ""),
-            sortOrder: sIdx + 1,
-        })
-        for (const group of section.groups || []) {
-            ;(group.items || []).forEach((item, iIdx) => {
-                const { description, priceNote } = splitPriceNote(item)
-                items.push({
-                    omegaId: item.ID,
-                    title: clean(item.ITEMNAME),
-                    slug: slugify(item.ITEMNAME, item.ID),
-                    description,
-                    price: typeof item.PRICE === "number" ? item.PRICE : null,
-                    priceNote,
-                    sectionOmegaId: section.ID,
-                    popular: item.POPULAR !== 0,
-                    newItem: item.NEWITEM !== 0,
-                    sortOrder: iIdx + 1,
-                })
-            })
-        }
-    })
-    return { sections, items }
-}
+// transform() / splitPriceNote() / slugify() live in ../shared/transform.js
+// (shared verbatim with the Framer plugin). See imports at the top of this file.
 
 // ─── Step 4: upsert into Framer ─────────────────────────────────────────────
 
@@ -306,6 +247,7 @@ async function main() {
     }
 }
 
+// Re-export the shared transform helpers so existing importers of this module keep working.
 export { transform, splitPriceNote, slugify }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
