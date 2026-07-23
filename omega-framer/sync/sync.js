@@ -23,12 +23,23 @@ import { connect } from "framer-api"
 import { transform, splitPriceNote, slugify } from "../shared/transform.js"
 
 // ─── Config: match these to your Framer collection & field names ────────────
+// Mirrors the plugin's 3-level hierarchy: Categories → Sections → Items, linked by
+// reference fields. The Category field on Sections/Items may be a Collection Reference
+// (→ Menu Categories) or, for older setups, an Option/enum — both are handled. The
+// Menu Categories collection is optional: if you haven't created it, the sync runs
+// 2-level and skips category references.
 const CONFIG = {
+    categoriesCollection: "Menu Categories",
     sectionsCollection: "Menu Sections",
     itemsCollection: "Menu Items",
+    categoryFields: {
+        title: "Title", // Framer's built-in title field
+        sortOrder: "Sort Order", // Number
+        omegaId: "Omega ID", // Number  ← upsert key
+    },
     sectionFields: {
         title: "Title", // Framer's built-in title field
-        category: "Category", // Option: Food | Beverages
+        category: "Category", // Reference → Menu Categories (or Option: Food | Beverages)
         comment: "Comment", // Plain text
         sortOrder: "Sort Order", // Number
         omegaId: "Omega ID", // Number  ← upsert key
@@ -39,11 +50,14 @@ const CONFIG = {
         price: "Price", // Number (optional)
         priceNote: "Price Note", // Plain text (optional)
         section: "Section", // Reference → Menu Sections
+        category: "Category", // Reference → Menu Categories (or Option) — optional
         popular: "Popular", // Toggle
         newItem: "New", // Toggle
         sortOrder: "Sort Order", // Number
         omegaId: "Omega ID", // Number  ← upsert key
     },
+    // Fields tolerated as missing on existing collections (keeps older setups working).
+    optionalFields: { section: ["category"], item: ["category"] },
 }
 
 const OMEGA_BASE = "https://menu.omegasoftware.ca"
@@ -94,15 +108,26 @@ async function fetchOmegaMenu() {
 
 // ─── Step 4: upsert into Framer ─────────────────────────────────────────────
 
-function fieldMap(fields, wanted, collectionName) {
+function fieldMap(fields, wanted, collectionName, optional = []) {
     const byName = new Map(fields.map((f) => [f.name.toLowerCase(), f]))
     const map = {}
     for (const [key, name] of Object.entries(wanted)) {
         const f = byName.get(name.toLowerCase())
-        if (!f) throw new Error(`Field "${name}" not found in "${collectionName}". Available: ${fields.map((x) => x.name).join(", ")}`)
+        if (!f) {
+            if (optional.includes(key)) continue // tolerated as missing on older collections
+            throw new Error(`Field "${name}" not found in "${collectionName}". Available: ${fields.map((x) => x.name).join(", ")}`)
+        }
         map[key] = f
     }
     return map
+}
+
+/** Resolve a Category field value: reference → the category's Framer item id; enum → its name. */
+const categoryEntry = (field, categoryId, categoryName, catAfter) => {
+    if (field.type === "collectionReference") {
+        return entry(field, catAfter?.get(categoryId)?.id ?? null)
+    }
+    return entry(field, categoryName) // Option/enum (older setups)
 }
 
 const entry = (field, value) => {
@@ -146,8 +171,8 @@ async function addInChunks(collection, rows, size = 50) {
 async function main() {
     console.log(`Fetching Omega menu for "${CUSTOMER_ID}"…`)
     const raw = await fetchOmegaMenu()
-    const { sections, items } = transform(raw)
-    console.log(`Transformed: ${sections.length} sections, ${items.length} items`)
+    const { categories, sections, items } = transform(raw)
+    console.log(`Transformed: ${categories.length} categories, ${sections.length} sections, ${items.length} items`)
 
     const framer = await connect(process.env.FRAMER_PROJECT_URL, process.env.FRAMER_API_KEY)
     try {
@@ -157,11 +182,40 @@ async function main() {
             if (!c) throw new Error(`Collection "${name}" not found. Available: ${collections.map((x) => x.name).join(", ")}`)
             return c
         }
+        // Menu Categories is optional — 2-level setups just won't have it.
+        const categoriesCol = collections.find((x) => x.name.toLowerCase() === CONFIG.categoriesCollection.toLowerCase())
         const sectionsCol = find(CONFIG.sectionsCollection)
         const itemsCol = find(CONFIG.itemsCollection)
 
-        // Sections first (items reference them)
-        const sFields = fieldMap(await sectionsCol.getFields(), CONFIG.sectionFields, sectionsCol.name)
+        // Categories first (sections + items reference them)
+        let catAfter = new Map()
+        if (categoriesCol) {
+            const cFields = fieldMap(await categoriesCol.getFields(), CONFIG.categoryFields, categoriesCol.name)
+            const cExisting = indexByOmegaId(await categoriesCol.getItems(), cFields.omegaId)
+            console.log(`Upserting categories into "${categoriesCol.name}"…`)
+            await addInChunks(
+                categoriesCol,
+                categories.map((c, i) => {
+                    const existing = cExisting.get(c.id)
+                    return {
+                        ...(existing ? { id: existing.id } : {}),
+                        slug: existing ? existing.slug : slugify(c.name, c.id),
+                        draft: false,
+                        fieldData: {
+                            [cFields.title.id]: entry(cFields.title, c.name),
+                            [cFields.sortOrder.id]: entry(cFields.sortOrder, i + 1),
+                            [cFields.omegaId.id]: entry(cFields.omegaId, c.id),
+                        },
+                    }
+                })
+            )
+            catAfter = indexByOmegaId(await categoriesCol.getItems(), cFields.omegaId)
+        } else {
+            console.log(`(No "${CONFIG.categoriesCollection}" collection — syncing 2-level, skipping category references.)`)
+        }
+
+        // Sections next (items reference them)
+        const sFields = fieldMap(await sectionsCol.getFields(), CONFIG.sectionFields, sectionsCol.name, CONFIG.optionalFields.section)
         const sExisting = indexByOmegaId(await sectionsCol.getItems(), sFields.omegaId)
 
         console.log(`Upserting sections into "${sectionsCol.name}"…`)
@@ -175,7 +229,7 @@ async function main() {
                     draft: false,
                     fieldData: {
                         [sFields.title.id]: entry(sFields.title, s.title),
-                        [sFields.category.id]: entry(sFields.category, s.category),
+                        ...(sFields.category ? { [sFields.category.id]: categoryEntry(sFields.category, s.categoryId, s.category, catAfter) } : {}),
                         [sFields.comment.id]: entry(sFields.comment, s.comment),
                         [sFields.sortOrder.id]: entry(sFields.sortOrder, s.sortOrder),
                         [sFields.omegaId.id]: entry(sFields.omegaId, s.omegaId),
@@ -188,7 +242,7 @@ async function main() {
         const sAfter = indexByOmegaId(await sectionsCol.getItems(), sFields.omegaId)
 
         // Items
-        const iFields = fieldMap(await itemsCol.getFields(), CONFIG.itemFields, itemsCol.name)
+        const iFields = fieldMap(await itemsCol.getFields(), CONFIG.itemFields, itemsCol.name, CONFIG.optionalFields.item)
         const iExisting = indexByOmegaId(await itemsCol.getItems(), iFields.omegaId)
 
         console.log(`Upserting items into "${itemsCol.name}"…`)
@@ -207,6 +261,7 @@ async function main() {
                         [iFields.price.id]: entry(iFields.price, it.price),
                         [iFields.priceNote.id]: entry(iFields.priceNote, it.priceNote),
                         [iFields.section.id]: entry(iFields.section, sectionRef),
+                        ...(iFields.category ? { [iFields.category.id]: categoryEntry(iFields.category, it.categoryId, it.category, catAfter) } : {}),
                         [iFields.popular.id]: entry(iFields.popular, it.popular),
                         [iFields.newItem.id]: entry(iFields.newItem, it.newItem),
                         [iFields.sortOrder.id]: entry(iFields.sortOrder, it.sortOrder),
