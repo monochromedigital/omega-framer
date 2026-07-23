@@ -1,13 +1,12 @@
 /**
  * Shared Omega → CMS transform logic.
  *
- * Pure, framework-agnostic functions used by BOTH:
- *   - sync/sync.js       (Server API, unattended cron)
- *   - plugin/            (Framer plugin, managed collections)
+ * Pure, framework-agnostic functions used by the Framer plugin (managed
+ * collections).
  *
  * Takes the raw `getRestaurantMenu` JSON and produces flat `sections` + `items`
- * arrays keyed on Omega IDs. See omega-framer/CLAUDE.md for the data quirks these
- * functions handle (dual pricing, duplicate names, dirty second-language fields).
+ * arrays keyed on Omega IDs. See CLAUDE.md for the data quirks these functions
+ * handle (dual pricing, duplicate names, dirty second-language fields).
  */
 
 /** Slugify a label and append the Omega ID so duplicate names stay unique
@@ -39,8 +38,13 @@ export function splitPriceNote(item) {
     return { description: clean(raw), priceNote: "" }
 }
 
-/** Raw getRestaurantMenu JSON → { sections[], items[] } flat arrays keyed on Omega IDs. */
+/** Raw getRestaurantMenu JSON → { brand, categories[], sections[], items[] } keyed on Omega IDs. */
 export function transform(data) {
+    // Venue/brand name, used to prefix the generated collection names. BARANCHNAME is the
+    // (misspelled) branch-name field Omega returns; fall back to OTHERNAME then a clean blank.
+    const branch = data.branch || {}
+    const brand = clean(branch.BRANCHNAME || branch.BARANCHNAME || branch.OTHERNAME || "")
+
     // Categories are dynamic per venue (Food/Beverages for Tavolina; others may add
     // Tobacco, Breakfast, …). Expose the full list so consumers can build enums from it.
     const categories = (data.categories || []).map((c) => ({ id: c.CATEGORYID, name: clean(c.CATEGORYNAME) }))
@@ -79,5 +83,5 @@ export function transform(data) {
             })
         }
     })
-    return { categories, sections, items }
+    return { brand, categories, sections, items }
 }

@@ -1,6 +1,6 @@
 import { framer, type ManagedCollection, useIsAllowedTo } from "@framer/plugin"
 import { useMemo, useState } from "react"
-import { type ImportConfig, importMenu, importMethods, type MenuPreview, previewCounts } from "./data"
+import { brandedCollectionName, type ImportConfig, importMenu, importMethods, type MenuPreview, previewCounts } from "./data"
 
 interface ConfigureImportProps {
     collection: ManagedCollection
@@ -17,6 +17,14 @@ export function ConfigureImport({ collection, preview, initialConfig, onBack }: 
     const excludedCats = useMemo(() => new Set(config.excludedCategoryIds), [config.excludedCategoryIds])
     const excludedSecs = useMemo(() => new Set(config.excludedSectionIds), [config.excludedSectionIds])
     const counts = useMemo(() => previewCounts(preview, config), [preview, config])
+
+    // The active collection becomes "Menu Items" but the plugin can't rename it (Framer set its
+    // name, no rename API). If it doesn't match the {{Brand}}-{{Collection}} convention, suggest a
+    // manual rename in the CMS so it lines up with the Categories/Sections collections.
+    const categoriesName = brandedCollectionName(preview.brand, "Menu Categories")
+    const sectionsName = brandedCollectionName(preview.brand, "Menu Sections")
+    const itemsName = brandedCollectionName(preview.brand, "Menu Items")
+    const showRenameHint = preview.brand.trim() !== "" && collection.name !== itemsName
 
     const setLevel = (key: "categories" | "sections", value: boolean) =>
         setConfig(c => ({ ...c, levels: { ...c.levels, [key]: value } }))
@@ -85,6 +93,12 @@ export function ConfigureImport({ collection, preview, initialConfig, onBack }: 
                         <span>Menu Items</span>
                         <input type="checkbox" checked readOnly disabled />
                     </label>
+                    {showRenameHint && (
+                        <p className="hint">
+                            Tip: rename this collection to <code>{itemsName}</code> in the CMS to match{" "}
+                            <code>{categoriesName}</code> and <code>{sectionsName}</code>.
+                        </p>
+                    )}
                 </section>
 
                 <section>

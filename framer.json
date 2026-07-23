@@ -1,6 +1,6 @@
 {
     "id": "0e9a4c",
     "name": "Omega Menu Import",
-    "modes": ["configureManagedCollection", "syncManagedCollection"],
+    "modes": ["canvas", "configureManagedCollection", "syncManagedCollection"],
     "icon": "/icon.svg"
 }

@@ -1,5 +1,5 @@
 /**
- * Omega oMenu fetch helper — ported verbatim from sync/sync.js → fetchOmegaMenu().
+ * Omega oMenu fetch helper — fetchOmegaMenu().
  *
  * Does the Laravel auth dance server-side (browsers can't):
  *   1. GET the public menu page to collect session + XSRF cookies

@@ -11,7 +11,8 @@ populates three managed collections in one import:
 
 ## Features
 
-- **One-click import** of the full menu into three plugin-managed collections.
+- **One-click import** of the full menu into three plugin-managed collections, named after the
+  venue: `{{Brand}}-Menu Categories`, `{{Brand}}-Menu Sections`, `{{Brand}}-Menu Items`.
 - **3-level hierarchy, linked both ways** — child→parent references *and* parent→children
   multi-references, so you can nest Collection Lists (source an inner list from *Current
   Item's Sections / Items*).
@@ -58,8 +59,3 @@ VITE_WORKER_BASE=https://your-worker.vercel.app npm run build
 
 The plugin needs the `worker/` proxy deployed (any serverless host; Vercel by default). See
 [worker/README.md](worker/README.md).
-
-## Scheduled sync
-
-For unattended, editor-closed syncing (into user-created collections via Framer's Server
-API), see the companion project — it runs on a schedule via GitHub Actions.
