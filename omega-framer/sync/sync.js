@@ -285,8 +285,15 @@ async function main() {
         const iAfter = indexByOmegaId(await itemsCol.getItems(), iFields.omegaId)
 
         // ── Pass 2: parent → children multi-references (mirrors the plugin) ──
-        // Only runs when the optional multi-reference fields exist on the collections.
-        if (categoriesCol && cFields?.sections) {
+        // Only runs when the down-reference fields exist AND are Multi References — a single
+        // Reference rejects the array of child ids. Warn if the field is the wrong type.
+        if (categoriesCol && cFields?.sections && cFields.sections.type !== "multiCollectionReference") {
+            console.log(`(Skipping category→sections link — "${cFields.sections.name}" is not a Multi Reference. Make it "Multiple" to enable nested lists.)`)
+        }
+        if (sFields.items && sFields.items.type !== "multiCollectionReference") {
+            console.log(`(Skipping section→items link — "${sFields.items.name}" is not a Multi Reference. Make it "Multiple" to enable nested lists.)`)
+        }
+        if (categoriesCol && cFields?.sections?.type === "multiCollectionReference") {
             const sectionIdsByCategory = new Map()
             for (const s of sections) {
                 const fid = sAfter.get(s.omegaId)?.id
@@ -313,7 +320,7 @@ async function main() {
                 })
             )
         }
-        if (sFields.items) {
+        if (sFields.items?.type === "multiCollectionReference") {
             const itemIdsBySection = new Map()
             for (const it of items) {
                 const fid = iAfter.get(it.omegaId)?.id
