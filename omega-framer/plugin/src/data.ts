@@ -7,43 +7,25 @@ import {
     type ProtectedMethod,
 } from "@framer/plugin"
 // Shared Omega → CMS transform, reused verbatim from sync/ (see ../../shared/transform.js).
-import { transform } from "../../shared/transform.js"
+import { transform, type MenuItem, type MenuSection } from "../../shared/transform.js"
 
 /** Deployed Omega proxy (worker/). Overridable at build time via VITE_WORKER_BASE. */
 const WORKER_BASE = import.meta.env.VITE_WORKER_BASE ?? "https://worker-monochrome-dev.vercel.app"
 
 const CUSTOMER_ID_RE = /^[a-z0-9_-]{1,40}$/
 
+const SECTIONS_SOURCE = "menu-sections"
+const ITEMS_SOURCE = "menu-items"
+const SECTIONS_COLLECTION_NAME = "Menu Sections"
+
 export const PLUGIN_KEYS = {
     DATA_SOURCE_ID: "dataSourceId",
     CUSTOMER_ID: "customerId",
 } as const
 
-export const dataSourceOptions = [
-    { id: "menu-sections", name: "Menu Sections" },
-    { id: "menu-items", name: "Menu Items" },
-] as const
-
-export type DataSourceId = (typeof dataSourceOptions)[number]["id"]
-
-/** A single CMS item with a plugin-controlled id (= the Omega ID) and a stable slug. */
-export interface DataItem {
-    id: string
-    slug: string
-    fieldData: FieldDataInput
-}
-
-export interface DataSource {
-    id: DataSourceId
-    customerId: string
-    fields: ManagedCollectionFieldInput[]
-    items: DataItem[]
-}
-
 /** Accept a raw customer id ("tavolina") or any Omega/worker URL and return the validated id. */
 export function parseCustomerId(input: string): string {
     const trimmed = input.trim()
-    // Last non-empty path segment of a URL, or the raw string.
     const raw = trimmed.includes("/") ? (trimmed.replace(/\/+$/, "").split("/").pop() ?? "") : trimmed
     const id = raw.toLowerCase()
     if (!CUSTOMER_ID_RE.test(id)) {
@@ -52,6 +34,7 @@ export function parseCustomerId(input: string): string {
     return id
 }
 
+// ─── Field value builders ───────────────────────────────────────────────────
 const str = (value: string): FieldDataInput[string] => ({ type: "string", value })
 const num = (value: number): FieldDataInput[string] => ({ type: "number", value })
 const bool = (value: boolean): FieldDataInput[string] => ({ type: "boolean", value })
@@ -63,35 +46,17 @@ const CATEGORY_CASES = [
     { id: "beverages", name: "Beverages" },
 ] as const
 
-function buildSections(customerId: string, sections: ReturnType<typeof transform>["sections"]): DataSource {
-    const fields: ManagedCollectionFieldInput[] = [
+// ─── Schema + item shaping (pure) ────────────────────────────────────────────
+function sectionFields(): ManagedCollectionFieldInput[] {
+    return [
         { id: "title", name: "Title", type: "string" },
         { id: "category", name: "Category", type: "enum", cases: [...CATEGORY_CASES] },
         { id: "comment", name: "Comment", type: "string" },
         { id: "sortOrder", name: "Sort Order", type: "number" },
     ]
-
-    const items: DataItem[] = sections.map(section => ({
-        id: String(section.omegaId),
-        slug: section.slug,
-        fieldData: {
-            title: str(section.title),
-            category: enumVal(section.category.toLowerCase() === "beverages" ? "beverages" : "food"),
-            comment: str(section.comment),
-            sortOrder: num(section.sortOrder),
-        },
-    }))
-
-    return { id: "menu-sections", customerId, fields, items }
 }
 
-async function buildItems(customerId: string, menuItems: ReturnType<typeof transform>["items"]): Promise<DataSource> {
-    // Items reference Sections. Find the already-synced Menu Sections collection to link to.
-    const sectionsCollectionId = await findManagedCollectionId("menu-sections")
-    if (!sectionsCollectionId) {
-        framer.notify("Sync “Menu Sections” first so items can link to their section.", { variant: "warning" })
-    }
-
+function itemFields(sectionsCollectionId: string | null): ManagedCollectionFieldInput[] {
     const fields: ManagedCollectionFieldInput[] = [
         { id: "title", name: "Title", type: "string" },
         { id: "description", name: "Description", type: "string" },
@@ -104,8 +69,25 @@ async function buildItems(customerId: string, menuItems: ReturnType<typeof trans
     if (sectionsCollectionId) {
         fields.push({ id: "section", name: "Section", type: "collectionReference", collectionId: sectionsCollectionId })
     }
+    return fields
+}
 
-    const items: DataItem[] = menuItems.map(item => {
+function sectionItems(sections: MenuSection[]): ManagedCollectionItemInput[] {
+    return sections.map(section => ({
+        id: String(section.omegaId),
+        slug: section.slug,
+        draft: false,
+        fieldData: {
+            title: str(section.title),
+            category: enumVal(section.category.toLowerCase() === "beverages" ? "beverages" : "food"),
+            comment: str(section.comment),
+            sortOrder: num(section.sortOrder),
+        },
+    }))
+}
+
+function itemItems(items: MenuItem[], hasSectionRef: boolean): ManagedCollectionItemInput[] {
+    return items.map(item => {
         const fieldData: FieldDataInput = {
             title: str(item.title),
             description: str(item.description),
@@ -116,124 +98,123 @@ async function buildItems(customerId: string, menuItems: ReturnType<typeof trans
         }
         // Price is nullable in the POS; leave the field empty rather than writing null.
         if (typeof item.price === "number") fieldData.price = num(item.price)
-        // Reference value = the section's item id, which is its Omega ID (see buildSections).
-        if (sectionsCollectionId) fieldData.section = ref(String(item.sectionOmegaId))
-        return { id: String(item.omegaId), slug: item.slug, fieldData }
+        // Reference value = the section's item id, which is its Omega ID (see sectionItems).
+        if (hasSectionRef) fieldData.section = ref(String(item.sectionOmegaId))
+        return { id: String(item.omegaId), slug: item.slug, draft: false, fieldData }
     })
-
-    return { id: "menu-items", customerId, fields, items }
 }
 
-/** Fetch the menu from the worker proxy and shape it into the requested data source. */
-export async function getDataSource(
-    dataSourceId: DataSourceId,
-    customerId: string,
-    abortSignal?: AbortSignal
-): Promise<DataSource> {
+// ─── Fetch ────────────────────────────────────────────────────────────────--
+async function fetchMenu(customerId: string, abortSignal?: AbortSignal) {
     const response = await fetch(`${WORKER_BASE}/menu/${customerId}`, { signal: abortSignal })
     if (!response.ok) {
         const body = await response.text().catch(() => "")
         throw new Error(`Failed to load menu for “${customerId}” (${response.status}). ${body}`.trim())
     }
-    const raw = await response.json()
-    const { sections, items } = transform(raw)
-
-    if (dataSourceId === "menu-sections") return buildSections(customerId, sections)
-    return buildItems(customerId, items)
+    return transform(await response.json())
 }
 
-/** Look up a managed collection this plugin previously synced for the given data source. */
-async function findManagedCollectionId(dataSourceId: DataSourceId): Promise<string | null> {
-    const collections = await framer.getCollections()
+// ─── Collection helpers ──────────────────────────────────────────────────────
+async function upsertItems(collection: ManagedCollection, items: ManagedCollectionItemInput[]) {
+    const unsynced = new Set(await collection.getItemIds())
+    for (const item of items) unsynced.delete(item.id)
+    await collection.removeItems(Array.from(unsynced))
+    await collection.addItems(items)
+}
+
+async function syncSectionsInto(collection: ManagedCollection, customerId: string, sections: MenuSection[]) {
+    await collection.setFields(sectionFields())
+    await upsertItems(collection, sectionItems(sections))
+    await collection.setPluginData(PLUGIN_KEYS.DATA_SOURCE_ID, SECTIONS_SOURCE)
+    await collection.setPluginData(PLUGIN_KEYS.CUSTOMER_ID, customerId)
+}
+
+async function syncItemsInto(
+    collection: ManagedCollection,
+    customerId: string,
+    items: MenuItem[],
+    sectionsCollectionId: string | null
+) {
+    await collection.setFields(itemFields(sectionsCollectionId))
+    await upsertItems(collection, itemItems(items, Boolean(sectionsCollectionId)))
+    await collection.setPluginData(PLUGIN_KEYS.DATA_SOURCE_ID, ITEMS_SOURCE)
+    await collection.setPluginData(PLUGIN_KEYS.CUSTOMER_ID, customerId)
+}
+
+/** Find a managed collection this plugin uses for the given data source (by plugin data, then name). */
+async function findSectionsCollection(): Promise<ManagedCollection | null> {
+    const collections = await framer.getManagedCollections()
     for (const collection of collections) {
-        if (!("getPluginData" in collection)) continue
         try {
-            const id = await collection.getPluginData(PLUGIN_KEYS.DATA_SOURCE_ID)
-            if (id === dataSourceId) return collection.id
+            if ((await collection.getPluginData(PLUGIN_KEYS.DATA_SOURCE_ID)) === SECTIONS_SOURCE) return collection
         } catch {
-            // Not a managed collection we control; ignore.
+            // ignore collections we can't read
         }
+    }
+    for (const collection of collections) {
+        if (collection.name === SECTIONS_COLLECTION_NAME) return collection
     }
     return null
 }
 
-export function mergeFieldsWithExistingFields(
-    sourceFields: readonly ManagedCollectionFieldInput[],
-    existingFields: readonly ManagedCollectionFieldInput[]
-): ManagedCollectionFieldInput[] {
-    return sourceFields.map(sourceField => {
-        const existingField = existingFields.find(existingField => existingField.id === sourceField.id)
-        if (existingField) {
-            return { ...sourceField, name: existingField.name }
-        }
-        return sourceField
-    })
-}
-
-export async function syncCollection(
-    collection: ManagedCollection,
-    dataSource: DataSource,
-    fields: readonly ManagedCollectionFieldInput[]
-) {
-    const allowedFieldIds = new Set(fields.map(field => field.id))
-    const items: ManagedCollectionItemInput[] = []
-    const unsyncedItems = new Set(await collection.getItemIds())
-
-    for (const item of dataSource.items) {
-        unsyncedItems.delete(item.id)
-
-        const fieldData: FieldDataInput = {}
-        for (const [fieldId, value] of Object.entries(item.fieldData)) {
-            if (!allowedFieldIds.has(fieldId)) continue // field ignored in the mapping UI
-            fieldData[fieldId] = value
-        }
-
-        items.push({ id: item.id, slug: item.slug, draft: false, fieldData })
-    }
-
-    await collection.removeItems(Array.from(unsyncedItems))
-    await collection.addItems(items)
-
-    await collection.setPluginData(PLUGIN_KEYS.DATA_SOURCE_ID, dataSource.id)
-    await collection.setPluginData(PLUGIN_KEYS.CUSTOMER_ID, dataSource.customerId)
-}
-
+// ─── Permissions ─────────────────────────────────────────────────────────────
 export const syncMethods = [
-    "ManagedCollection.removeItems",
+    "ManagedCollection.setFields",
     "ManagedCollection.addItems",
+    "ManagedCollection.removeItems",
     "ManagedCollection.setPluginData",
 ] as const satisfies ProtectedMethod[]
 
+export const importMethods = [...syncMethods, "createManagedCollection"] as const satisfies ProtectedMethod[]
+
+// ─── Public entry points ─────────────────────────────────────────────────────
+
+/**
+ * One-shot import: populate the active collection as Menu Items and auto-create/reuse a
+ * linked Menu Sections collection. Sections are synced first so items can reference them.
+ */
+export async function importMenu(itemsCollection: ManagedCollection, customerId: string) {
+    const { sections, items } = await fetchMenu(customerId)
+
+    const sectionsCollection = (await findSectionsCollection()) ?? (await framer.createManagedCollection(SECTIONS_COLLECTION_NAME))
+    await syncSectionsInto(sectionsCollection, customerId, sections)
+
+    await syncItemsInto(itemsCollection, customerId, items, sectionsCollection.id)
+}
+
+/** Resync one already-configured collection (Framer's resync button, syncManagedCollection mode). */
 export async function syncExistingCollection(
     collection: ManagedCollection,
     previousDataSourceId: string | null,
     previousCustomerId: string | null
 ): Promise<{ didSync: boolean }> {
-    if (!previousDataSourceId || !previousCustomerId) {
-        return { didSync: false }
-    }
-
-    if (framer.mode !== "syncManagedCollection") {
-        return { didSync: false }
-    }
-
-    if (!framer.isAllowedTo(...syncMethods)) {
-        return { didSync: false }
-    }
-
-    const isKnownSource = dataSourceOptions.some(option => option.id === previousDataSourceId)
-    if (!isKnownSource) {
-        return { didSync: false }
-    }
+    if (!previousDataSourceId || !previousCustomerId) return { didSync: false }
+    if (framer.mode !== "syncManagedCollection") return { didSync: false }
+    if (!framer.isAllowedTo(...syncMethods)) return { didSync: false }
 
     try {
-        const dataSource = await getDataSource(previousDataSourceId as DataSourceId, previousCustomerId)
-        const existingFields = await collection.getFields()
-        await syncCollection(collection, dataSource, existingFields)
-        return { didSync: true }
+        const { sections, items } = await fetchMenu(previousCustomerId)
+
+        if (previousDataSourceId === SECTIONS_SOURCE) {
+            await syncSectionsInto(collection, previousCustomerId, sections)
+            return { didSync: true }
+        }
+
+        if (previousDataSourceId === ITEMS_SOURCE) {
+            const sectionsCollection = await findSectionsCollection()
+            if (!sectionsCollection) {
+                framer.notify("Linked “Menu Sections” collection not found; items will sync without a section link.", {
+                    variant: "warning",
+                })
+            }
+            await syncItemsInto(collection, previousCustomerId, items, sectionsCollection?.id ?? null)
+            return { didSync: true }
+        }
+
+        return { didSync: false }
     } catch (error) {
         console.error(error)
-        framer.notify(`Failed to sync “${previousDataSourceId}” for “${previousCustomerId}”. Check the console.`, {
+        framer.notify(`Failed to sync menu for “${previousCustomerId}”. Check the console for details.`, {
             variant: "error",
         })
         return { didSync: false }
