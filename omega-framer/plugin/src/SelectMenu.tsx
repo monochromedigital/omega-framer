@@ -1,30 +1,27 @@
-import { framer, type ManagedCollection, useIsAllowedTo } from "@framer/plugin"
+import { framer } from "@framer/plugin"
 import { useState } from "react"
-import { importMenu, importMethods, parseCustomerId } from "./data"
+import { loadMenuPreview, type MenuPreview, parseCustomerId } from "./data"
 
-interface ImportMenuProps {
-    collection: ManagedCollection
+interface SelectMenuProps {
+    onLoaded: (preview: MenuPreview) => void
 }
 
-export function ImportMenu({ collection }: ImportMenuProps) {
+export function SelectMenu({ onLoaded }: SelectMenuProps) {
     const [customerInput, setCustomerInput] = useState("")
-    const [isImporting, setIsImporting] = useState(false)
-    const isAllowed = useIsAllowedTo(...importMethods)
+    const [isLoading, setIsLoading] = useState(false)
 
     const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault()
 
         try {
-            setIsImporting(true)
+            setIsLoading(true)
             const customerId = parseCustomerId(customerInput)
-            await importMenu(collection, customerId)
-            framer.closePlugin("Menu imported successfully", { variant: "success" })
+            const preview = await loadMenuPreview(customerId)
+            onLoaded(preview)
         } catch (error) {
             console.error(error)
-            framer.notify(error instanceof Error ? error.message : "Failed to import the menu.", {
-                variant: "error",
-            })
-            setIsImporting(false)
+            framer.notify(error instanceof Error ? error.message : "Failed to load the menu.", { variant: "error" })
+            setIsLoading(false)
         }
     }
 
@@ -42,11 +39,7 @@ export function ImportMenu({ collection }: ImportMenuProps) {
                 </div>
                 <div className="content">
                     <h2>Omega Menu Import</h2>
-                    <p>
-                        Paste an Omega menu URL (or customer id). This collection becomes <strong>Menu Items</strong>;
-                        linked <strong>Menu Categories</strong> and <strong>Menu Sections</strong> collections are created
-                        automatically for nested lists.
-                    </p>
+                    <p>Paste an Omega menu URL (or customer id) to load it, then choose what to import.</p>
                 </div>
             </div>
 
@@ -62,15 +55,11 @@ export function ImportMenu({ collection }: ImportMenuProps) {
                         autoCapitalize="off"
                         autoCorrect="off"
                         spellCheck={false}
-                        disabled={isImporting || !isAllowed}
+                        disabled={isLoading}
                     />
                 </label>
-                <button
-                    type="submit"
-                    disabled={!customerInput.trim() || isImporting || !isAllowed}
-                    title={isAllowed ? undefined : "Insufficient permissions"}
-                >
-                    {isImporting ? <div className="framer-spinner" /> : "Import Menu"}
+                <button type="submit" disabled={!customerInput.trim() || isLoading}>
+                    {isLoading ? <div className="framer-spinner" /> : "Next"}
                 </button>
             </form>
         </main>

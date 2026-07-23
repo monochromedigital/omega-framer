@@ -10,8 +10,14 @@ const activeCollection = await framer.getActiveManagedCollection()
 
 const previousDataSourceId = await activeCollection.getPluginData(PLUGIN_KEYS.DATA_SOURCE_ID)
 const previousCustomerId = await activeCollection.getPluginData(PLUGIN_KEYS.CUSTOMER_ID)
+const previousImportConfig = await activeCollection.getPluginData(PLUGIN_KEYS.IMPORT_CONFIG)
 
-const { didSync } = await syncExistingCollection(activeCollection, previousDataSourceId, previousCustomerId)
+const { didSync } = await syncExistingCollection(
+    activeCollection,
+    previousDataSourceId,
+    previousCustomerId,
+    previousImportConfig
+)
 
 if (didSync) {
     framer.closePlugin("Synchronization successful", {

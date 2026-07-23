@@ -187,3 +187,115 @@ input[type="text"]:disabled,
 .mapping footer > button {
     text-transform: capitalize;
 }
+
+/* ─── Configure Import screen ─────────────────────────────────────────────── */
+.configure {
+    padding-bottom: 0;
+    gap: 0;
+}
+
+.config-scroll {
+    width: 100%;
+    overflow-y: auto;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    padding-bottom: 10px;
+}
+
+.configure section {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    gap: 6px;
+}
+
+.configure h3 {
+    font-size: 0.9em;
+    color: var(--framer-color-text);
+    margin-bottom: 4px;
+}
+
+.configure .row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    min-height: 26px;
+    color: var(--framer-color-text-secondary);
+    gap: 10px;
+}
+
+.configure .row span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.configure .row input[type="checkbox"] {
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.configure .muted {
+    opacity: 0.45;
+}
+
+.configure .group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.configure .group-label {
+    font-weight: 600;
+    color: var(--framer-color-text-tertiary);
+    padding-top: 4px;
+}
+
+.configure footer {
+    position: sticky;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    background-color: var(--framer-color-bg);
+    margin-top: auto;
+    padding: 10px 0 15px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.configure footer::before {
+    content: "";
+    position: absolute;
+    top: -30px;
+    left: 0;
+    width: 100%;
+    height: 30px;
+    background: linear-gradient(to bottom, transparent, var(--framer-color-bg));
+    pointer-events: none;
+}
+
+.configure .summary {
+    color: var(--framer-color-text-tertiary);
+    text-align: center;
+}
+
+.configure .actions {
+    display: flex;
+    flex-direction: row;
+    gap: 10px;
+}
+
+.configure .actions button {
+    flex: 1;
+}
+
+.configure .actions .secondary {
+    background-color: var(--framer-color-bg-tertiary);
+    color: var(--framer-color-text);
+}
