@@ -6,9 +6,9 @@ Pulls the live menu from `menu.omegasoftware.ca/tavolina` (the same JSON API the
 
 1. **Framer API key** — open the project in Framer → Cmd+K → "open settings" → API Keys → create a key.
 2. **Project URL** — copy it from your browser, format: `https://framer.com/projects/YourProject--xxxxxxxx`.
-3. **Collections** — the script expects these (already created):
-   - `Menu Sections`: Title, Category (Option: Food, Beverages), Comment (Plain text), Sort Order (Number), Omega ID (Number)
-   - `Menu Items`: Title, Description (Plain text), Price (Number), Price Note (Plain text), Section (Reference → Menu Sections), Popular (Toggle), New (Toggle), Sort Order (Number), Omega ID (Number)
+3. **Collections** — create three collections (`Menu Categories`, `Menu Sections`, `Menu Items`)
+   with the fields the script expects. Full field-by-field walkthrough (including the optional
+   parent→children multi-reference fields for nested lists) is in **[SETUP.md](SETUP.md)**.
 
    Field names are matched case-insensitively. If yours differ, edit `CONFIG` at the top of `sync.js`.
 
