@@ -1,6 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
+    { "source": "/health", "destination": "/api/health" },
     { "source": "/menu/:customerid", "destination": "/api/menu/:customerid" },
     { "source": "/data/:customerid", "destination": "/api/data/:customerid" }
   ]

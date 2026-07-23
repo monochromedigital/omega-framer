@@ -5,6 +5,7 @@
     "type": "module",
     "scripts": {
         "build": "vite build",
+        "pack": "npm run build && cd dist && rm -f ../plugin.zip && zip -r ../plugin.zip . -x '.*' && cd ..",
         "check": "npm run check-typescript && npm run check-eslint",
         "dev": "vite",
         "format": "prettier --write .",
