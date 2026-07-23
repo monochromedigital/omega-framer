@@ -1,9 +1,15 @@
 /** Type declarations for the shared (plain-JS) Omega → CMS transform module. */
 
+export interface MenuCategory {
+    id: number
+    name: string
+}
+
 export interface MenuSection {
     omegaId: number
     title: string
     slug: string
+    categoryId: number
     category: string
     comment: string
     sortOrder: number
@@ -23,6 +29,7 @@ export interface MenuItem {
 }
 
 export interface TransformResult {
+    categories: MenuCategory[]
     sections: MenuSection[]
     items: MenuItem[]
 }

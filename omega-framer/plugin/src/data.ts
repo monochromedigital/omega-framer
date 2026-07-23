@@ -7,7 +7,7 @@ import {
     type ProtectedMethod,
 } from "@framer/plugin"
 // Shared Omega → CMS transform, reused verbatim from sync/ (see ../../shared/transform.js).
-import { transform, type MenuItem, type MenuSection } from "../../shared/transform.js"
+import { transform, type MenuCategory, type MenuItem, type MenuSection } from "../../shared/transform.js"
 
 /** Deployed Omega proxy (worker/). Overridable at build time via VITE_WORKER_BASE. */
 const WORKER_BASE = import.meta.env.VITE_WORKER_BASE ?? "https://worker-monochrome-dev.vercel.app"
@@ -41,16 +41,30 @@ const bool = (value: boolean): FieldDataInput[string] => ({ type: "boolean", val
 const enumVal = (value: string): FieldDataInput[string] => ({ type: "enum", value })
 const ref = (value: string): FieldDataInput[string] => ({ type: "collectionReference", value })
 
-const CATEGORY_CASES = [
-    { id: "food", name: "Food" },
-    { id: "beverages", name: "Beverages" },
-] as const
-
 // ─── Schema + item shaping (pure) ────────────────────────────────────────────
-function sectionFields(): ManagedCollectionFieldInput[] {
+
+/**
+ * Build the Category enum cases dynamically from the venue's own category list
+ * (Food/Beverages for Tavolina; other venues may add Tobacco, Breakfast, …). Case id =
+ * the Omega CATEGORYID as a string, so section values map by id. Any category id that a
+ * section references but the list omits is added as a fallback so nothing is dropped.
+ */
+function buildCategoryCases(categories: MenuCategory[], sections: MenuSection[]): { id: string; name: string }[] {
+    const cases = new Map<string, { id: string; name: string }>()
+    for (const category of categories) {
+        cases.set(String(category.id), { id: String(category.id), name: category.name || `Category ${category.id}` })
+    }
+    for (const section of sections) {
+        const id = String(section.categoryId)
+        if (!cases.has(id)) cases.set(id, { id, name: section.category || `Category ${id}` })
+    }
+    return Array.from(cases.values())
+}
+
+function sectionFields(categoryCases: { id: string; name: string }[]): ManagedCollectionFieldInput[] {
     return [
         { id: "title", name: "Title", type: "string" },
-        { id: "category", name: "Category", type: "enum", cases: [...CATEGORY_CASES] },
+        { id: "category", name: "Category", type: "enum", cases: categoryCases },
         { id: "comment", name: "Comment", type: "string" },
         { id: "sortOrder", name: "Sort Order", type: "number" },
     ]
@@ -79,7 +93,7 @@ function sectionItems(sections: MenuSection[]): ManagedCollectionItemInput[] {
         draft: false,
         fieldData: {
             title: str(section.title),
-            category: enumVal(section.category.toLowerCase() === "beverages" ? "beverages" : "food"),
+            category: enumVal(String(section.categoryId)),
             comment: str(section.comment),
             sortOrder: num(section.sortOrder),
         },
@@ -122,8 +136,13 @@ async function upsertItems(collection: ManagedCollection, items: ManagedCollecti
     await collection.addItems(items)
 }
 
-async function syncSectionsInto(collection: ManagedCollection, customerId: string, sections: MenuSection[]) {
-    await collection.setFields(sectionFields())
+async function syncSectionsInto(
+    collection: ManagedCollection,
+    customerId: string,
+    categories: MenuCategory[],
+    sections: MenuSection[]
+) {
+    await collection.setFields(sectionFields(buildCategoryCases(categories, sections)))
     await upsertItems(collection, sectionItems(sections))
     await collection.setPluginData(PLUGIN_KEYS.DATA_SOURCE_ID, SECTIONS_SOURCE)
     await collection.setPluginData(PLUGIN_KEYS.CUSTOMER_ID, customerId)
@@ -174,10 +193,10 @@ export const importMethods = [...syncMethods, "createManagedCollection"] as cons
  * linked Menu Sections collection. Sections are synced first so items can reference them.
  */
 export async function importMenu(itemsCollection: ManagedCollection, customerId: string) {
-    const { sections, items } = await fetchMenu(customerId)
+    const { categories, sections, items } = await fetchMenu(customerId)
 
     const sectionsCollection = (await findSectionsCollection()) ?? (await framer.createManagedCollection(SECTIONS_COLLECTION_NAME))
-    await syncSectionsInto(sectionsCollection, customerId, sections)
+    await syncSectionsInto(sectionsCollection, customerId, categories, sections)
 
     await syncItemsInto(itemsCollection, customerId, items, sectionsCollection.id)
 }
@@ -193,10 +212,10 @@ export async function syncExistingCollection(
     if (!framer.isAllowedTo(...syncMethods)) return { didSync: false }
 
     try {
-        const { sections, items } = await fetchMenu(previousCustomerId)
+        const { categories, sections, items } = await fetchMenu(previousCustomerId)
 
         if (previousDataSourceId === SECTIONS_SOURCE) {
-            await syncSectionsInto(collection, previousCustomerId, sections)
+            await syncSectionsInto(collection, previousCustomerId, categories, sections)
             return { didSync: true }
         }
 
