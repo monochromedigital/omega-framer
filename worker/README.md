@@ -23,10 +23,18 @@ worker/
   api/
     _omega.js            # fetchOmega() — auth dance
     _handler.js          # CORS + validation + caching wrapper
+    health.js            # GET /api/health (aliased to /health) — liveness for uptime monitors
     menu/[customerid].js # GET /api/menu/:id  (aliased to /menu/:id)
     data/[customerid].js # GET /api/data/:id  (aliased to /data/:id)
-  vercel.json            # rewrites /menu + /data → /api/...
+  vercel.json            # rewrites /health + /menu + /data → /api/...
 ```
+
+## Monitoring
+
+`GET /health` returns `{ ok: true, … }` without touching Omega — point an uptime monitor
+(e.g. UptimeRobot, free) at it to know the worker is up. Add a second monitor on
+`/menu/tavolina` for full end-to-end coverage; that path is edge-cached (~5 min) so frequent
+checks mostly hit the cache and don't load Omega.
 
 ## Deploy
 
