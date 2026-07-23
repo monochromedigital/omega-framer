@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# macOS
+.DS_Store
+
+# Env / secrets
+.env
+.env.*
+*.local
+
+# Editor / tooling
+.claude/
+
+# Logs
+*.log
+npm-debug.log*

@@ -1,0 +1,19 @@
+{
+  "name": "tavolina-menu-sync",
+  "version": "1.0.0",
+  "description": "Sync Tavolina menu from Omega POS to Framer CMS",
+  "main": "index.js",
+  "scripts": {
+    "sync": "node sync.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "framer-api": "^0.1.24"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  }
+}

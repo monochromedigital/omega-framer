@@ -1,0 +1,31 @@
+name: Sync Tavolina menu to Framer
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: menu-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+        working-directory: sync
+      - name: Run sync
+        run: node sync.js
+        working-directory: sync
+        env:
+          FRAMER_PROJECT_URL: ${{ secrets.FRAMER_PROJECT_URL }}
+          FRAMER_API_KEY: ${{ secrets.FRAMER_API_KEY }}
+          OMEGA_CUSTOMER_ID: tavolina
+          REMOVE_MISSING: "false"
+          DEPLOY_PRODUCTION: "false"
