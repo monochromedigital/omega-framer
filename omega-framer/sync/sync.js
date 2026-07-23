@@ -20,6 +20,7 @@
  */
 
 import { connect } from "framer-api"
+import { fileURLToPath } from "node:url"
 import { transform, splitPriceNote, slugify } from "../shared/transform.js"
 
 // ─── Config: match these to your Framer collection & field names ────────────
@@ -374,7 +375,10 @@ async function main() {
 // Re-export the shared transform helpers so existing importers of this module keep working.
 export { transform, splitPriceNote, slugify }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run main() when executed directly. Compare decoded filesystem paths — import.meta.url is
+// URL-encoded (spaces → %20) while argv[1] is literal, so a raw string compare breaks on
+// paths containing spaces (e.g. ".../Amar Website/...").
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     main().catch((err) => {
         console.error("Sync failed:", err)
         process.exit(1)
