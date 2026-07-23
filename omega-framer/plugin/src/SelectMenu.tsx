@@ -4,10 +4,11 @@ import { loadMenuPreview, type MenuPreview, parseCustomerId } from "./data"
 
 interface SelectMenuProps {
     onLoaded: (preview: MenuPreview) => void
+    initialValue?: string
 }
 
-export function SelectMenu({ onLoaded }: SelectMenuProps) {
-    const [customerInput, setCustomerInput] = useState("")
+export function SelectMenu({ onLoaded, initialValue = "" }: SelectMenuProps) {
+    const [customerInput, setCustomerInput] = useState(initialValue)
     const [isLoading, setIsLoading] = useState(false)
 
     const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
