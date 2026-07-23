@@ -41,7 +41,10 @@ export function splitPriceNote(item) {
 
 /** Raw getRestaurantMenu JSON → { sections[], items[] } flat arrays keyed on Omega IDs. */
 export function transform(data) {
-    const categoryName = new Map(data.categories.map((c) => [c.CATEGORYID, clean(c.CATEGORYNAME)]))
+    // Categories are dynamic per venue (Food/Beverages for Tavolina; others may add
+    // Tobacco, Breakfast, …). Expose the full list so consumers can build enums from it.
+    const categories = (data.categories || []).map((c) => ({ id: c.CATEGORYID, name: clean(c.CATEGORYNAME) }))
+    const categoryName = new Map(categories.map((c) => [c.id, c.name]))
     const sections = []
     const items = []
 
@@ -51,6 +54,7 @@ export function transform(data) {
             omegaId: section.ID,
             title: clean(section.DESCRIPTION), // DESCRIPTION is the clean EN label
             slug: slugify(section.DESCRIPTION, section.ID),
+            categoryId: catId,
             category: categoryName.get(catId) || "Food",
             comment: clean(section.MENU_COMMENT || ""),
             sortOrder: sIdx + 1,
@@ -66,6 +70,8 @@ export function transform(data) {
                     price: typeof item.PRICE === "number" ? item.PRICE : null,
                     priceNote,
                     sectionOmegaId: section.ID,
+                    categoryId: catId, // denormalized from the section for direct filtering
+                    category: categoryName.get(catId) || "Food",
                     popular: item.POPULAR !== 0,
                     newItem: item.NEWITEM !== 0,
                     sortOrder: iIdx + 1,
@@ -73,5 +79,5 @@ export function transform(data) {
             })
         }
     })
-    return { sections, items }
+    return { categories, sections, items }
 }

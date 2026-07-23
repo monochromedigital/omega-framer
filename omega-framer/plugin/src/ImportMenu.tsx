@@ -1,31 +1,30 @@
-import { framer } from "@framer/plugin"
+import { framer, type ManagedCollection, useIsAllowedTo } from "@framer/plugin"
 import { useState } from "react"
-import { type DataSource, type DataSourceId, dataSourceOptions, getDataSource, parseCustomerId } from "./data"
+import { importMenu, importMethods, parseCustomerId } from "./data"
 
-interface SelectDataSourceProps {
-    onSelectDataSource: (dataSource: DataSource) => void
+interface ImportMenuProps {
+    collection: ManagedCollection
 }
 
-export function SelectDataSource({ onSelectDataSource }: SelectDataSourceProps) {
+export function ImportMenu({ collection }: ImportMenuProps) {
     const [customerInput, setCustomerInput] = useState("")
-    const [selectedDataSourceId, setSelectedDataSourceId] = useState<DataSourceId>(dataSourceOptions[0].id)
-    const [isLoading, setIsLoading] = useState(false)
+    const [isImporting, setIsImporting] = useState(false)
+    const isAllowed = useIsAllowedTo(...importMethods)
 
     const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault()
 
         try {
-            setIsLoading(true)
+            setIsImporting(true)
             const customerId = parseCustomerId(customerInput)
-            const dataSource = await getDataSource(selectedDataSourceId, customerId)
-            onSelectDataSource(dataSource)
+            await importMenu(collection, customerId)
+            framer.closePlugin("Menu imported successfully", { variant: "success" })
         } catch (error) {
             console.error(error)
-            framer.notify(error instanceof Error ? error.message : "Failed to load the menu.", {
+            framer.notify(error instanceof Error ? error.message : "Failed to import the menu.", {
                 variant: "error",
             })
-        } finally {
-            setIsLoading(false)
+            setIsImporting(false)
         }
     }
 
@@ -43,7 +42,11 @@ export function SelectDataSource({ onSelectDataSource }: SelectDataSourceProps) 
                 </div>
                 <div className="content">
                     <h2>Omega Menu Import</h2>
-                    <p>Paste an Omega menu URL (or customer id) and choose what to import.</p>
+                    <p>
+                        Paste an Omega menu URL (or customer id). This collection becomes <strong>Menu Items</strong>;
+                        linked <strong>Menu Categories</strong> and <strong>Menu Sections</strong> collections are created
+                        automatically for nested lists.
+                    </p>
                 </div>
             </div>
 
@@ -59,23 +62,15 @@ export function SelectDataSource({ onSelectDataSource }: SelectDataSourceProps) 
                         autoCapitalize="off"
                         autoCorrect="off"
                         spellCheck={false}
+                        disabled={isImporting || !isAllowed}
                     />
                 </label>
-                <label htmlFor="collection">
-                    <select
-                        id="collection"
-                        onChange={event => setSelectedDataSourceId(event.target.value as DataSourceId)}
-                        value={selectedDataSourceId}
-                    >
-                        {dataSourceOptions.map(({ id, name }) => (
-                            <option key={id} value={id}>
-                                {name}
-                            </option>
-                        ))}
-                    </select>
-                </label>
-                <button type="submit" disabled={!customerInput.trim() || isLoading}>
-                    {isLoading ? <div className="framer-spinner" /> : "Next"}
+                <button
+                    type="submit"
+                    disabled={!customerInput.trim() || isImporting || !isAllowed}
+                    title={isAllowed ? undefined : "Insufficient permissions"}
+                >
+                    {isImporting ? <div className="framer-spinner" /> : "Import Menu"}
                 </button>
             </form>
         </main>

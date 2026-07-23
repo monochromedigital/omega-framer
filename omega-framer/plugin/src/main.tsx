@@ -23,11 +23,7 @@ if (didSync) {
 
     createRoot(root).render(
         <StrictMode>
-            <App
-                collection={activeCollection}
-                previousDataSourceId={previousDataSourceId}
-                previousCustomerId={previousCustomerId}
-            />
+            <App collection={activeCollection} />
         </StrictMode>
     )
 }
