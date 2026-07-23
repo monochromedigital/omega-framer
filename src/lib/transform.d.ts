@@ -31,6 +31,7 @@ export interface MenuItem {
 }
 
 export interface TransformResult {
+    brand: string
     categories: MenuCategory[]
     sections: MenuSection[]
     items: MenuItem[]

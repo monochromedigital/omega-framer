@@ -21,7 +21,7 @@ clear JSON error (Omega serves its HTML shell for unknown venues).
 ```
 worker/
   api/
-    _omega.js            # fetchOmega() — auth dance, ported from sync/sync.js
+    _omega.js            # fetchOmega() — auth dance
     _handler.js          # CORS + validation + caching wrapper
     menu/[customerid].js # GET /api/menu/:id  (aliased to /menu/:id)
     data/[customerid].js # GET /api/data/:id  (aliased to /data/:id)

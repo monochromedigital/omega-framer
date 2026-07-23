@@ -6,7 +6,7 @@ import {
     type ManagedCollectionItemInput,
     type ProtectedMethod,
 } from "@framer/plugin"
-// Omega → CMS transform (self-contained copy; kept in sync with the automation project).
+// Omega → CMS transform.
 import { slugify, transform, type MenuCategory, type MenuItem, type MenuSection } from "./lib/transform.js"
 
 /** Deployed Omega proxy (worker/). Overridable at build time via VITE_WORKER_BASE. */
@@ -212,6 +212,7 @@ function groupChildIds(sections: MenuSection[], items: MenuItem[]) {
 // ─── Fetch + preview ─────────────────────────────────────────────────────────
 export interface MenuPreview {
     customerId: string
+    brand: string
     categories: MenuCategory[]
     sections: MenuSection[]
     items: MenuItem[]
@@ -228,8 +229,8 @@ async function fetchMenu(customerId: string, abortSignal?: AbortSignal) {
 
 /** Fetch + transform the full menu so the UI can present categories/sections to choose from. */
 export async function loadMenuPreview(customerId: string, abortSignal?: AbortSignal): Promise<MenuPreview> {
-    const { categories, sections, items } = await fetchMenu(customerId, abortSignal)
-    return { customerId, categories, sections, items }
+    const { brand, categories, sections, items } = await fetchMenu(customerId, abortSignal)
+    return { customerId, brand, categories, sections, items }
 }
 
 /** Apply the import config: level toggles, category/section exclusions, item flag filters. */
@@ -292,8 +293,33 @@ async function findCollectionBySource(source: string, name: string): Promise<Man
     return null
 }
 
+/** Prefix a collection name with the venue brand: "Tavolina" + "Menu Items" → "Tavolina-Menu Items". */
+export function brandedCollectionName(brand: string, base: string): string {
+    const prefix = brand.trim()
+    return prefix ? `${prefix}-${base}` : base
+}
+
+/**
+ * Create a managed collection, appending a numeric suffix if the name is already taken.
+ * Framer rejects duplicate names across the whole project (managed or not) and we can't see
+ * non-managed collections, so we react to the "already exists" error rather than pre-checking.
+ */
+async function createCollectionWithUniqueName(baseName: string): Promise<ManagedCollection> {
+    for (let suffix = 1; suffix <= 50; suffix++) {
+        const name = suffix === 1 ? baseName : `${baseName} ${suffix}`
+        try {
+            return await framer.createManagedCollection(name)
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            if (/already exists/i.test(message)) continue // name taken → try the next suffix
+            throw error
+        }
+    }
+    throw new Error(`Could not create a uniquely named collection for “${baseName}”.`)
+}
+
 async function getOrCreateCollection(source: string, name: string): Promise<ManagedCollection> {
-    return (await findCollectionBySource(source, name)) ?? (await framer.createManagedCollection(name))
+    return (await findCollectionBySource(source, name)) ?? (await createCollectionWithUniqueName(name))
 }
 
 /**
@@ -356,18 +382,20 @@ export const importMethods = [...syncMethods, "createManagedCollection"] as cons
 // ─── Public entry points ─────────────────────────────────────────────────────
 
 /**
- * One-shot import. The active collection becomes Menu Items; Menu Categories / Menu Sections
- * collections are created for the enabled levels. All linked both ways (up + down refs).
+ * One-shot import (CMS flow). The active collection — already created + named by Framer — becomes
+ * Menu Items; Menu Categories / Menu Sections collections are created (brand-prefixed) for the
+ * enabled levels. All linked both ways (up + down refs).
  */
 export async function importMenu(itemsCollection: ManagedCollection, customerId: string, config: ImportConfig) {
     const preview = await loadMenuPreview(customerId)
+    const base = preview.brand
     const { categories, sections, items } = applyConfig(preview, config)
 
     const categoriesCollection = config.levels.categories
-        ? await getOrCreateCollection(CATEGORIES_SOURCE, CATEGORIES_COLLECTION_NAME)
+        ? await getOrCreateCollection(CATEGORIES_SOURCE, brandedCollectionName(base, CATEGORIES_COLLECTION_NAME))
         : null
     const sectionsCollection = config.levels.sections
-        ? await getOrCreateCollection(SECTIONS_SOURCE, SECTIONS_COLLECTION_NAME)
+        ? await getOrCreateCollection(SECTIONS_SOURCE, brandedCollectionName(base, SECTIONS_COLLECTION_NAME))
         : null
 
     await runSync(itemsCollection, categoriesCollection, sectionsCollection, customerId, config, categories, sections, items)
@@ -396,16 +424,16 @@ export async function syncExistingCollection(
         const { categories, sections, items } = applyConfig(preview, config)
 
         const categoriesCollection = config.levels.categories
-            ? await findCollectionBySource(CATEGORIES_SOURCE, CATEGORIES_COLLECTION_NAME)
+            ? await findCollectionBySource(CATEGORIES_SOURCE, brandedCollectionName(preview.brand, CATEGORIES_COLLECTION_NAME))
             : null
         const sectionsCollection = config.levels.sections
-            ? await findCollectionBySource(SECTIONS_SOURCE, SECTIONS_COLLECTION_NAME)
+            ? await findCollectionBySource(SECTIONS_SOURCE, brandedCollectionName(preview.brand, SECTIONS_COLLECTION_NAME))
             : null
         // Resolve the Items collection (the active one if this button was its resync).
         const itemsCollection =
             previousDataSourceId === ITEMS_SOURCE
                 ? collection
-                : await findCollectionBySource(ITEMS_SOURCE, ITEMS_COLLECTION_NAME)
+                : await findCollectionBySource(ITEMS_SOURCE, brandedCollectionName(preview.brand, ITEMS_COLLECTION_NAME))
 
         if (!itemsCollection) {
             framer.notify("“Menu Items” collection not found — re-import from the plugin.", { variant: "error" })

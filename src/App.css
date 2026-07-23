@@ -243,6 +243,19 @@ input[type="text"]:disabled,
     opacity: 0.45;
 }
 
+.configure .hint {
+    color: var(--framer-color-text-tertiary);
+    line-height: 1.4;
+    margin-top: 6px;
+}
+
+.configure .hint code {
+    color: var(--framer-color-text-secondary);
+    background-color: var(--framer-color-bg-secondary);
+    padding: 1px 4px;
+    border-radius: 4px;
+}
+
 .configure .group {
     display: flex;
     flex-direction: column;
