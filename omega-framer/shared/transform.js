@@ -70,6 +70,8 @@ export function transform(data) {
                     price: typeof item.PRICE === "number" ? item.PRICE : null,
                     priceNote,
                     sectionOmegaId: section.ID,
+                    categoryId: catId, // denormalized from the section for direct filtering
+                    category: categoryName.get(catId) || "Food",
                     popular: item.POPULAR !== 0,
                     newItem: item.NEWITEM !== 0,
                     sortOrder: iIdx + 1,

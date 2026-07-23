@@ -70,12 +70,17 @@ function sectionFields(categoryCases: { id: string; name: string }[]): ManagedCo
     ]
 }
 
-function itemFields(sectionsCollectionId: string | null): ManagedCollectionFieldInput[] {
+function itemFields(
+    categoryCases: { id: string; name: string }[],
+    sectionsCollectionId: string | null
+): ManagedCollectionFieldInput[] {
     const fields: ManagedCollectionFieldInput[] = [
         { id: "title", name: "Title", type: "string" },
         { id: "description", name: "Description", type: "string" },
         { id: "price", name: "Price", type: "number" },
         { id: "priceNote", name: "Price Note", type: "string" },
+        // Category denormalized from the section so items can be filtered directly.
+        { id: "category", name: "Category", type: "enum", cases: categoryCases },
         { id: "popular", name: "Popular", type: "boolean" },
         { id: "newItem", name: "New", type: "boolean" },
         { id: "sortOrder", name: "Sort Order", type: "number" },
@@ -106,6 +111,7 @@ function itemItems(items: MenuItem[], hasSectionRef: boolean): ManagedCollection
             title: str(item.title),
             description: str(item.description),
             priceNote: str(item.priceNote),
+            category: enumVal(String(item.categoryId)),
             popular: bool(item.popular),
             newItem: bool(item.newItem),
             sortOrder: num(item.sortOrder),
@@ -139,10 +145,10 @@ async function upsertItems(collection: ManagedCollection, items: ManagedCollecti
 async function syncSectionsInto(
     collection: ManagedCollection,
     customerId: string,
-    categories: MenuCategory[],
+    categoryCases: { id: string; name: string }[],
     sections: MenuSection[]
 ) {
-    await collection.setFields(sectionFields(buildCategoryCases(categories, sections)))
+    await collection.setFields(sectionFields(categoryCases))
     await upsertItems(collection, sectionItems(sections))
     await collection.setPluginData(PLUGIN_KEYS.DATA_SOURCE_ID, SECTIONS_SOURCE)
     await collection.setPluginData(PLUGIN_KEYS.CUSTOMER_ID, customerId)
@@ -151,10 +157,11 @@ async function syncSectionsInto(
 async function syncItemsInto(
     collection: ManagedCollection,
     customerId: string,
+    categoryCases: { id: string; name: string }[],
     items: MenuItem[],
     sectionsCollectionId: string | null
 ) {
-    await collection.setFields(itemFields(sectionsCollectionId))
+    await collection.setFields(itemFields(categoryCases, sectionsCollectionId))
     await upsertItems(collection, itemItems(items, Boolean(sectionsCollectionId)))
     await collection.setPluginData(PLUGIN_KEYS.DATA_SOURCE_ID, ITEMS_SOURCE)
     await collection.setPluginData(PLUGIN_KEYS.CUSTOMER_ID, customerId)
@@ -194,11 +201,12 @@ export const importMethods = [...syncMethods, "createManagedCollection"] as cons
  */
 export async function importMenu(itemsCollection: ManagedCollection, customerId: string) {
     const { categories, sections, items } = await fetchMenu(customerId)
+    const categoryCases = buildCategoryCases(categories, sections)
 
     const sectionsCollection = (await findSectionsCollection()) ?? (await framer.createManagedCollection(SECTIONS_COLLECTION_NAME))
-    await syncSectionsInto(sectionsCollection, customerId, categories, sections)
+    await syncSectionsInto(sectionsCollection, customerId, categoryCases, sections)
 
-    await syncItemsInto(itemsCollection, customerId, items, sectionsCollection.id)
+    await syncItemsInto(itemsCollection, customerId, categoryCases, items, sectionsCollection.id)
 }
 
 /** Resync one already-configured collection (Framer's resync button, syncManagedCollection mode). */
@@ -213,9 +221,10 @@ export async function syncExistingCollection(
 
     try {
         const { categories, sections, items } = await fetchMenu(previousCustomerId)
+        const categoryCases = buildCategoryCases(categories, sections)
 
         if (previousDataSourceId === SECTIONS_SOURCE) {
-            await syncSectionsInto(collection, previousCustomerId, categories, sections)
+            await syncSectionsInto(collection, previousCustomerId, categoryCases, sections)
             return { didSync: true }
         }
 
@@ -226,7 +235,7 @@ export async function syncExistingCollection(
                     variant: "warning",
                 })
             }
-            await syncItemsInto(collection, previousCustomerId, items, sectionsCollection?.id ?? null)
+            await syncItemsInto(collection, previousCustomerId, categoryCases, items, sectionsCollection?.id ?? null)
             return { didSync: true }
         }
 

@@ -23,6 +23,8 @@ export interface MenuItem {
     price: number | null
     priceNote: string
     sectionOmegaId: number
+    categoryId: number
+    category: string
     popular: boolean
     newItem: boolean
     sortOrder: number
