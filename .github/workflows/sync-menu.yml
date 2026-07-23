@@ -19,10 +19,10 @@ jobs:
         with:
           node-version: 22
       - run: npm install
-        working-directory: sync
+        working-directory: omega-framer/sync
       - name: Run sync
         run: node sync.js
-        working-directory: sync
+        working-directory: omega-framer/sync
         env:
           FRAMER_PROJECT_URL: ${{ secrets.FRAMER_PROJECT_URL }}
           FRAMER_API_KEY: ${{ secrets.FRAMER_API_KEY }}
