@@ -43,8 +43,9 @@ export function ImportMenu({ collection }: ImportMenuProps) {
                 <div className="content">
                     <h2>Omega Menu Import</h2>
                     <p>
-                        Paste an Omega menu URL (or customer id). This collection becomes <strong>Menu Items</strong>; a
-                        linked <strong>Menu Sections</strong> collection is created automatically.
+                        Paste an Omega menu URL (or customer id). This collection becomes <strong>Menu Items</strong>;
+                        linked <strong>Menu Categories</strong> and <strong>Menu Sections</strong> collections are created
+                        automatically for nested lists.
                     </p>
                 </div>
             </div>
