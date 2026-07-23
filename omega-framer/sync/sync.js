@@ -36,6 +36,7 @@ const CONFIG = {
         title: "Title", // Framer's built-in title field
         sortOrder: "Sort Order", // Number
         omegaId: "Omega ID", // Number  ← upsert key
+        sections: "Sections", // Multi Reference → Menu Sections (down-ref) — optional
     },
     sectionFields: {
         title: "Title", // Framer's built-in title field
@@ -43,6 +44,7 @@ const CONFIG = {
         comment: "Comment", // Plain text
         sortOrder: "Sort Order", // Number
         omegaId: "Omega ID", // Number  ← upsert key
+        items: "Items", // Multi Reference → Menu Items (down-ref) — optional
     },
     itemFields: {
         title: "Title", // Framer's built-in title field
@@ -57,7 +59,9 @@ const CONFIG = {
         omegaId: "Omega ID", // Number  ← upsert key
     },
     // Fields tolerated as missing on existing collections (keeps older setups working).
-    optionalFields: { section: ["category"], item: ["category"] },
+    // The down-reference multi-fields (Categories.Sections, Sections.Items) are optional:
+    // add them in Framer to enable nested Collection Lists sourced from "Current Item".
+    optionalFields: { category: ["sections"], section: ["category", "items"], item: ["category"] },
 }
 
 const OMEGA_BASE = "https://menu.omegasoftware.ca"
@@ -146,6 +150,8 @@ const entry = (field, value) => {
         }
         case "collectionReference":
             return { type: "collectionReference", value: value ?? null }
+        case "multiCollectionReference":
+            return { type: "multiCollectionReference", value: Array.isArray(value) ? value : [] }
         default:
             throw new Error(`Unhandled field type "${field.type}" on "${field.name}"`)
     }
@@ -189,8 +195,9 @@ async function main() {
 
         // Categories first (sections + items reference them)
         let catAfter = new Map()
+        let cFields = null
         if (categoriesCol) {
-            const cFields = fieldMap(await categoriesCol.getFields(), CONFIG.categoryFields, categoriesCol.name)
+            cFields = fieldMap(await categoriesCol.getFields(), CONFIG.categoryFields, categoriesCol.name, CONFIG.optionalFields.category)
             const cExisting = indexByOmegaId(await categoriesCol.getItems(), cFields.omegaId)
             console.log(`Upserting categories into "${categoriesCol.name}"…`)
             await addInChunks(
@@ -270,6 +277,68 @@ async function main() {
                 }
             })
         )
+
+        // Re-read items to resolve their Framer ids (for the parent → children down-references)
+        const iAfter = indexByOmegaId(await itemsCol.getItems(), iFields.omegaId)
+
+        // ── Pass 2: parent → children multi-references (mirrors the plugin) ──
+        // Only runs when the optional multi-reference fields exist on the collections.
+        if (categoriesCol && cFields?.sections) {
+            const sectionIdsByCategory = new Map()
+            for (const s of sections) {
+                const fid = sAfter.get(s.omegaId)?.id
+                if (!fid) continue
+                const list = sectionIdsByCategory.get(s.categoryId) ?? []
+                list.push(fid)
+                sectionIdsByCategory.set(s.categoryId, list)
+            }
+            console.log(`Linking sections into "${categoriesCol.name}"…`)
+            await addInChunks(
+                categoriesCol,
+                categories.map((c, i) => {
+                    const existing = catAfter.get(c.id)
+                    return {
+                        ...(existing ? { id: existing.id, slug: existing.slug } : { slug: slugify(c.name, c.id) }),
+                        draft: false,
+                        fieldData: {
+                            [cFields.title.id]: entry(cFields.title, c.name),
+                            [cFields.sortOrder.id]: entry(cFields.sortOrder, i + 1),
+                            [cFields.omegaId.id]: entry(cFields.omegaId, c.id),
+                            [cFields.sections.id]: entry(cFields.sections, sectionIdsByCategory.get(c.id) ?? []),
+                        },
+                    }
+                })
+            )
+        }
+        if (sFields.items) {
+            const itemIdsBySection = new Map()
+            for (const it of items) {
+                const fid = iAfter.get(it.omegaId)?.id
+                if (!fid) continue
+                const list = itemIdsBySection.get(it.sectionOmegaId) ?? []
+                list.push(fid)
+                itemIdsBySection.set(it.sectionOmegaId, list)
+            }
+            console.log(`Linking items into "${sectionsCol.name}"…`)
+            await addInChunks(
+                sectionsCol,
+                sections.map((s) => {
+                    const existing = sAfter.get(s.omegaId)
+                    return {
+                        ...(existing ? { id: existing.id, slug: existing.slug } : { slug: s.slug }),
+                        draft: false,
+                        fieldData: {
+                            [sFields.title.id]: entry(sFields.title, s.title),
+                            ...(sFields.category ? { [sFields.category.id]: categoryEntry(sFields.category, s.categoryId, s.category, catAfter) } : {}),
+                            [sFields.comment.id]: entry(sFields.comment, s.comment),
+                            [sFields.sortOrder.id]: entry(sFields.sortOrder, s.sortOrder),
+                            [sFields.omegaId.id]: entry(sFields.omegaId, s.omegaId),
+                            [sFields.items.id]: entry(sFields.items, itemIdsBySection.get(s.omegaId) ?? []),
+                        },
+                    }
+                })
+            )
+        }
 
         // Optional cleanup: remove CMS items that disappeared from the POS
         if (process.env.REMOVE_MISSING === "true") {
