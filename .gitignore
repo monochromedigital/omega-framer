@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+plugin.zip
+
+# Vercel (worker)
+worker/.vercel/
+
+# macOS / editor / secrets
+.DS_Store
+.claude/
+.env
+.env.*
+*.local
+*.log
