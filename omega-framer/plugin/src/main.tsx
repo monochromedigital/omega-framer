@@ -4,7 +4,7 @@ import { framer } from "@framer/plugin"
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 import { App } from "./App.tsx"
-import { PLUGIN_KEYS, syncExistingCollection } from "./data"
+import { parseImportConfig, PLUGIN_KEYS, syncExistingCollection } from "./data"
 
 const activeCollection = await framer.getActiveManagedCollection()
 
@@ -12,6 +12,9 @@ const previousDataSourceId = await activeCollection.getPluginData(PLUGIN_KEYS.DA
 const previousCustomerId = await activeCollection.getPluginData(PLUGIN_KEYS.CUSTOMER_ID)
 const previousImportConfig = await activeCollection.getPluginData(PLUGIN_KEYS.IMPORT_CONFIG)
 
+// Resync button (syncManagedCollection mode) → sync in place and close.
+// Opening via the plugin menu (configureManagedCollection mode) → show the UI so the Omega
+// link and filters can be edited, pre-filled with the current settings.
 const { didSync } = await syncExistingCollection(
     activeCollection,
     previousDataSourceId,
@@ -29,7 +32,11 @@ if (didSync) {
 
     createRoot(root).render(
         <StrictMode>
-            <App collection={activeCollection} />
+            <App
+                collection={activeCollection}
+                initialCustomerId={previousCustomerId}
+                initialConfig={parseImportConfig(previousImportConfig)}
+            />
         </StrictMode>
     )
 }

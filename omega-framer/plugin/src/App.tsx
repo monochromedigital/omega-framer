@@ -3,14 +3,17 @@ import "./App.css"
 import { framer, type ManagedCollection } from "@framer/plugin"
 import { useLayoutEffect, useState } from "react"
 import { ConfigureImport } from "./ConfigureImport"
-import { DEFAULT_CONFIG, type MenuPreview } from "./data"
+import { DEFAULT_CONFIG, type ImportConfig, type MenuPreview } from "./data"
 import { SelectMenu } from "./SelectMenu"
 
 interface AppProps {
     collection: ManagedCollection
+    /** Pre-fill when reconfiguring an already-synced collection (edit the Omega link/filters). */
+    initialCustomerId?: string | null
+    initialConfig?: ImportConfig
 }
 
-export function App({ collection }: AppProps) {
+export function App({ collection, initialCustomerId, initialConfig = DEFAULT_CONFIG }: AppProps) {
     const [preview, setPreview] = useState<MenuPreview | null>(null)
 
     useLayoutEffect(() => {
@@ -25,14 +28,14 @@ export function App({ collection }: AppProps) {
     }, [preview])
 
     if (!preview) {
-        return <SelectMenu onLoaded={setPreview} />
+        return <SelectMenu onLoaded={setPreview} initialValue={initialCustomerId ?? ""} />
     }
 
     return (
         <ConfigureImport
             collection={collection}
             preview={preview}
-            initialConfig={DEFAULT_CONFIG}
+            initialConfig={initialConfig}
             onBack={() => setPreview(null)}
         />
     )

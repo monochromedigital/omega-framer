@@ -57,7 +57,7 @@ export const DEFAULT_CONFIG: ImportConfig = {
     itemFlags: { onlyPopular: false, onlyNew: false, requirePrice: false },
 }
 
-function parseConfig(raw: string | null): ImportConfig {
+export function parseImportConfig(raw: string | null): ImportConfig {
     if (!raw) return DEFAULT_CONFIG
     try {
         const parsed = JSON.parse(raw) as Partial<ImportConfig>
@@ -391,7 +391,7 @@ export async function syncExistingCollection(
     if (!knownSources.includes(previousDataSourceId)) return { didSync: false }
 
     try {
-        const config = parseConfig(previousImportConfig)
+        const config = parseImportConfig(previousImportConfig)
         const preview = await loadMenuPreview(previousCustomerId)
         const { categories, sections, items } = applyConfig(preview, config)
 
