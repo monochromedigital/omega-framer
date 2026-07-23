@@ -266,7 +266,9 @@ async function main() {
                     fieldData: {
                         [iFields.title.id]: entry(iFields.title, it.title),
                         [iFields.description.id]: entry(iFields.description, it.description),
-                        [iFields.price.id]: entry(iFields.price, it.price),
+                        // Price is nullable in the POS; omit the field when empty — Framer's
+                        // Number field rejects null (dual-priced items carry text in Price Note).
+                        ...(typeof it.price === "number" ? { [iFields.price.id]: entry(iFields.price, it.price) } : {}),
                         [iFields.priceNote.id]: entry(iFields.priceNote, it.priceNote),
                         [iFields.section.id]: entry(iFields.section, sectionRef),
                         ...(iFields.category ? { [iFields.category.id]: categoryEntry(iFields.category, it.categoryId, it.category, catAfter) } : {}),
