@@ -21,13 +21,13 @@ if (framer.mode === "syncManagedCollection" || framer.mode === "configureManaged
     const activeCollection = await framer.getActiveManagedCollection()
 
     const previousDataSourceId = await activeCollection.getPluginData(PLUGIN_KEYS.DATA_SOURCE_ID)
-    const previousCustomerId = await activeCollection.getPluginData(PLUGIN_KEYS.CUSTOMER_ID)
+    const previousMenuSource = await activeCollection.getPluginData(PLUGIN_KEYS.CUSTOMER_ID)
     const previousImportConfig = await activeCollection.getPluginData(PLUGIN_KEYS.IMPORT_CONFIG)
 
     const { didSync } = await syncExistingCollection(
         activeCollection,
         previousDataSourceId,
-        previousCustomerId,
+        previousMenuSource,
         previousImportConfig
     )
 
@@ -37,7 +37,7 @@ if (framer.mode === "syncManagedCollection" || framer.mode === "configureManaged
         render(
             <App
                 collection={activeCollection}
-                initialCustomerId={previousCustomerId}
+                initialSource={previousMenuSource}
                 initialConfig={parseImportConfig(previousImportConfig)}
             />
         )

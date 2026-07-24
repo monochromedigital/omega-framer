@@ -2,9 +2,19 @@
 
 ## What this is
 
-A Framer plugin that imports any restaurant menu hosted on **Omega Software's oMenu**
-platform (`https://menu.omegasoftware.ca/{customerid}`) into Framer CMS as a linked,
-nestable **3-level hierarchy**: Menu Categories → Menu Sections → Menu Items.
+A Framer plugin that imports a restaurant menu into Framer CMS as a linked, nestable
+**3-level hierarchy**: Menu Categories → Menu Sections → Menu Items. Two platforms, dispatched
+on the URL host (`parseMenuSource` in `data.ts`):
+- **Omega Software's oMenu** — `https://menu.omegasoftware.ca/{customerid}` (JSON POST API,
+  USD default). Fetched via the worker's `/menu/{id}`, then `transform()`.
+- **redro.menu** — `https://{sub}.redro.menu/{locale}/restaurant/{loc}.html` (no content API;
+  server-rendered schema.org HTML, SAR default). Scraped **server-side in the worker**
+  (`/redro?url=…`, cheerio) into the same `{ brand, categories, sections, items }` shape, so
+  `data.ts` is platform-agnostic. redro ids are strings (UUID/slug) → menu ids are `number |
+  string` (`SourceId`). redro adds item **images** (detail-page photos) + **calories**.
+
+Menu Items carry `Image` (image), `Calories` (plain text — NOT number; Framer rejects optional
+numbers), and `Currency` (plain text) fields; image/calories are written only when present.
 
 **Goal:** publish it on the Framer Marketplace. Repo is public:
 `monochromedigital/omega-framer`. This repo is only the plugin.

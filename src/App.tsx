@@ -8,12 +8,12 @@ import { SelectMenu } from "./SelectMenu"
 
 interface AppProps {
     collection: ManagedCollection
-    /** Pre-fill when reconfiguring an already-synced collection (edit the Omega link/filters). */
-    initialCustomerId?: string | null
+    /** Pre-fill when reconfiguring an already-synced collection (edit the menu link/filters). */
+    initialSource?: string | null
     initialConfig?: ImportConfig
 }
 
-export function App({ collection, initialCustomerId, initialConfig = DEFAULT_CONFIG }: AppProps) {
+export function App({ collection, initialSource, initialConfig = DEFAULT_CONFIG }: AppProps) {
     const [preview, setPreview] = useState<MenuPreview | null>(null)
 
     useLayoutEffect(() => {
@@ -28,7 +28,7 @@ export function App({ collection, initialCustomerId, initialConfig = DEFAULT_CON
     }, [preview])
 
     if (!preview) {
-        return <SelectMenu onLoaded={setPreview} initialValue={initialCustomerId ?? ""} />
+        return <SelectMenu onLoaded={setPreview} initialValue={initialSource ?? ""} />
     }
 
     return (
