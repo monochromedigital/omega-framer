@@ -87,6 +87,44 @@ input[type="text"]:disabled,
     color: var(--framer-color-text-tertiary);
 }
 
+/* ─── Supported providers (setup screen) ──────────────────────────────────── */
+.providers {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    gap: 5px;
+}
+
+.providers .providers-label {
+    color: var(--framer-color-text-tertiary);
+    font-weight: 600;
+}
+
+.providers .provider {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    gap: 8px;
+    min-height: 20px;
+}
+
+.providers .provider-name {
+    color: var(--framer-color-text-secondary);
+    white-space: nowrap;
+}
+
+.providers code {
+    color: var(--framer-color-text-tertiary);
+    background-color: var(--framer-color-bg-secondary);
+    padding: 1px 4px;
+    border-radius: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .setup label {
     display: flex;
     flex-direction: row;

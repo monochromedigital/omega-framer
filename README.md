@@ -1,11 +1,16 @@
-# Omega Menu Import — Framer plugin
+# Restaurant Menu Import — Framer plugin
 
-Import any restaurant menu hosted on **Omega Software's oMenu** platform
-(`menu.omegasoftware.ca/{customerid}`) straight into Framer CMS — as a linked,
-nestable 3-level hierarchy.
+Import a restaurant menu straight into Framer CMS — as a linked, nestable 3-level hierarchy.
 
-Paste a menu URL (or customer id), choose exactly what to sync, and the plugin creates and
-populates three managed collections in one import:
+Supported menu providers (dispatched on the URL host):
+
+| Provider | Menu link | Notes |
+|---|---|---|
+| **Omega Software's oMenu** | `menu.omegasoftware.ca/{customerid}` | JSON API, USD default |
+| **redro.menu** | `{venue}.redro.menu/{locale}/restaurant/{location}.html` | SAR default; adds item **photos** + **calories** |
+
+Paste a menu URL (or an Omega customer id), choose exactly what to sync, and the plugin creates
+and populates three managed collections in one import:
 
 **Menu Categories → Menu Sections → Menu Items**
 
@@ -42,7 +47,7 @@ npm run dev        # serves the plugin over https (mkcert)
 ```
 
 Then in Framer: **Plugins → open the local dev URL**, create a CMS collection, and manage it
-with **Omega Menu Import**.
+with **Restaurant Menu Import**.
 
 ```bash
 npm run check      # tsc + eslint

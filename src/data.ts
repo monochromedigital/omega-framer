@@ -40,6 +40,22 @@ export interface MenuSource {
     currency: string
 }
 
+export interface ProviderInfo {
+    platform: Platform
+    /** Display name, shown on the first screen. */
+    name: string
+    /** Host shape shown as a hint — mirrors what parseMenuSource dispatches on. */
+    host: string
+}
+
+/** The menu providers this plugin supports, listed on the first screen so users can tell at a
+ *  glance whether their platform works. Keep in sync with parseMenuSource's host dispatch —
+ *  adding a provider means a new entry here AND a new branch there. */
+export const PROVIDERS: readonly ProviderInfo[] = [
+    { platform: "omega", name: "Omega oMenu", host: "menu.omegasoftware.ca" },
+    { platform: "redro", name: "redro.menu", host: "*.redro.menu" },
+]
+
 // A 3-level hierarchy: Categories → Sections → Items. Linked BOTH ways:
 //   • up-references   (child → parent)  : Section.category, Item.section, Item.category
 //   • down-references (parent → children, multi): Category.sections, Section.items
