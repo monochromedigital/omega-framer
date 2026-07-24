@@ -1,6 +1,7 @@
 import { framer, type ManagedCollection, useIsAllowedTo } from "@framer/plugin"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { brandedCollectionName, type ImportConfig, importMenu, importMethods, type MenuPreview, previewCounts } from "./data"
+import type { SourceId } from "./lib/transform.js"
 
 interface ConfigureImportProps {
     collection: ManagedCollection
@@ -13,6 +14,15 @@ export function ConfigureImport({ collection, preview, initialConfig, onBack }: 
     const [config, setConfig] = useState<ImportConfig>(initialConfig)
     const [isImporting, setIsImporting] = useState(false)
     const isAllowed = useIsAllowedTo(...importMethods)
+
+    // Don't touch state after the plugin/UI unmounts mid-import.
+    const mountedRef = useRef(true)
+    useEffect(() => {
+        mountedRef.current = true
+        return () => {
+            mountedRef.current = false
+        }
+    }, [])
 
     const excludedCats = useMemo(() => new Set(config.excludedCategoryIds), [config.excludedCategoryIds])
     const excludedSecs = useMemo(() => new Set(config.excludedSectionIds), [config.excludedSectionIds])
@@ -29,7 +39,7 @@ export function ConfigureImport({ collection, preview, initialConfig, onBack }: 
     const setLevel = (key: "categories" | "sections", value: boolean) =>
         setConfig(c => ({ ...c, levels: { ...c.levels, [key]: value } }))
 
-    const toggleCategory = (id: number) =>
+    const toggleCategory = (id: SourceId) =>
         setConfig(c => {
             const next = new Set(c.excludedCategoryIds)
             if (next.has(id)) next.delete(id)
@@ -37,7 +47,7 @@ export function ConfigureImport({ collection, preview, initialConfig, onBack }: 
             return { ...c, excludedCategoryIds: Array.from(next) }
         })
 
-    const toggleSection = (id: number) =>
+    const toggleSection = (id: SourceId) =>
         setConfig(c => {
             const next = new Set(c.excludedSectionIds)
             if (next.has(id)) next.delete(id)
@@ -59,9 +69,11 @@ export function ConfigureImport({ collection, preview, initialConfig, onBack }: 
     const handleImport = async () => {
         try {
             setIsImporting(true)
-            await importMenu(collection, preview.customerId, config)
+            await importMenu(collection, preview.source, config)
+            if (!mountedRef.current) return
             framer.closePlugin("Menu imported successfully", { variant: "success" })
         } catch (error) {
+            if (!mountedRef.current) return // unmounted mid-import — don't setState
             console.error(error)
             framer.notify(error instanceof Error ? error.message : "Failed to import the menu.", { variant: "error" })
             setIsImporting(false)

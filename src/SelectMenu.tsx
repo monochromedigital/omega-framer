@@ -1,6 +1,6 @@
 import { framer } from "@framer/plugin"
-import { useState } from "react"
-import { loadMenuPreview, type MenuPreview, parseCustomerId } from "./data"
+import { useEffect, useRef, useState } from "react"
+import { loadMenuPreview, type MenuPreview } from "./data"
 
 interface SelectMenuProps {
     onLoaded: (preview: MenuPreview) => void
@@ -11,15 +11,31 @@ export function SelectMenu({ onLoaded, initialValue = "" }: SelectMenuProps) {
     const [customerInput, setCustomerInput] = useState(initialValue)
     const [isLoading, setIsLoading] = useState(false)
 
+    // Ignore an in-flight load if the plugin/UI unmounts (abort the fetch + skip any setState).
+    const abortRef = useRef<AbortController | null>(null)
+    const mountedRef = useRef(true)
+    useEffect(() => {
+        mountedRef.current = true
+        return () => {
+            mountedRef.current = false
+            abortRef.current?.abort()
+        }
+    }, [])
+
     const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault()
 
+        abortRef.current?.abort()
+        const controller = new AbortController()
+        abortRef.current = controller
+
         try {
             setIsLoading(true)
-            const customerId = parseCustomerId(customerInput)
-            const preview = await loadMenuPreview(customerId)
+            const preview = await loadMenuPreview(customerInput, controller.signal)
+            if (!mountedRef.current || controller.signal.aborted) return
             onLoaded(preview)
         } catch (error) {
+            if (controller.signal.aborted || !mountedRef.current) return // unmounted/superseded — ignore
             console.error(error)
             framer.notify(error instanceof Error ? error.message : "Failed to load the menu.", { variant: "error" })
             setIsLoading(false)
@@ -40,7 +56,7 @@ export function SelectMenu({ onLoaded, initialValue = "" }: SelectMenuProps) {
                 </div>
                 <div className="content">
                     <h2>Omega Menu Import</h2>
-                    <p>Paste an Omega menu URL (or customer id) to load it, then choose what to import.</p>
+                    <p>Paste a menu URL — Omega (customer id or link) or redro.menu — to load it, then choose what to import.</p>
                 </div>
             </div>
 
@@ -49,7 +65,7 @@ export function SelectMenu({ onLoaded, initialValue = "" }: SelectMenuProps) {
                     <input
                         id="customer"
                         type="text"
-                        placeholder="tavolina or menu URL"
+                        placeholder="tavolina or a menu URL"
                         value={customerInput}
                         onChange={event => setCustomerInput(event.target.value)}
                         autoComplete="off"
