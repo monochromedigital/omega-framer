@@ -1,4 +1,4 @@
-# Omega Menu Import — Framer plugin (project context)
+# Restaurant Menu Import — Framer plugin (project context)
 
 ## What this is
 
@@ -39,7 +39,7 @@ numbers), and `Currency` (plain text) fields; image/calories are written only wh
 
 ## How it works (key design)
 
-- **CMS-only.** The plugin runs from the CMS ("＋ New Collection → manage with Omega Menu
+- **CMS-only.** The plugin runs from the CMS ("＋ New Collection → manage with Restaurant Menu
   Import"), i.e. `configureManagedCollection` / `syncManagedCollection` modes. Canvas mode is
   declared in the manifest only so a Plugins-menu launch shows an "Open from the CMS" guard
   (`src/OpenFromCMS.tsx`) instead of erroring — canvas blocks the managed-collection APIs the

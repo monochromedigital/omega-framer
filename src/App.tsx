@@ -20,7 +20,8 @@ export function App({ collection, initialSource, initialConfig = DEFAULT_CONFIG 
         const configuring = Boolean(preview)
         framer.showUI({
             width: configuring ? 320 : 280,
-            height: configuring ? 500 : 316,
+            // The setup screen also lists the supported providers, so it needs more height.
+            height: configuring ? 500 : 390,
             minWidth: configuring ? 320 : undefined,
             minHeight: configuring ? 400 : undefined,
             resizable: configuring,
