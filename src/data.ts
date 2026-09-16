@@ -6,6 +6,7 @@ import {
     type ManagedCollectionItemInput,
     type ProtectedMethod,
 } from "@framer/plugin"
+import { cleanMenuName, slugText, uniquifySlugs } from "./lib/names"
 // Menu → CMS transform (Omega JSON; redro is scraped server-side by the worker).
 import { transform, type MenuCategory, type MenuItem, type MenuSection, type TransformResult } from "./lib/transform.js"
 
@@ -103,6 +104,8 @@ export interface ImportConfig {
     /** Location-scoped section ids to exclude (cascades to their items). */
     excludedSectionIds: string[]
     itemFlags: ItemFlags
+    /** Tidy POS names: title-case ALL CAPS, strip branch codes ("-SS"), spell out BTL/GLS/PCS. */
+    cleanNames: boolean
 }
 
 export const DEFAULT_CONFIG: ImportConfig = {
@@ -112,6 +115,7 @@ export const DEFAULT_CONFIG: ImportConfig = {
     excludedCategoryIds: [],
     excludedSectionIds: [],
     itemFlags: { onlyPopular: false, onlyNew: false, requirePrice: false },
+    cleanNames: true,
 }
 
 /**
@@ -134,6 +138,7 @@ export function parseImportConfig(raw: string | null, legacyLocationKey: string 
             excludedCategoryIds: scope(parsed.excludedCategoryIds),
             excludedSectionIds: scope(parsed.excludedSectionIds),
             itemFlags: { ...DEFAULT_CONFIG.itemFlags, ...parsed.itemFlags },
+            cleanNames: typeof parsed.cleanNames === "boolean" ? parsed.cleanNames : DEFAULT_CONFIG.cleanNames,
         }
     } catch {
         return DEFAULT_CONFIG
@@ -174,7 +179,8 @@ export function parseMenuSource(input: string): MenuSource {
         return { platform: "omega", value: id, currency: "USD" }
     }
     if (/(^|\.)redro\.menu$/i.test(url.hostname)) {
-        return { platform: "redro", value: url.href, currency: "SAR" }
+        url.hash = "" // links copied from the browser often end in "#"
+        return { platform: "redro", value: url.href.replace(/#$/, ""), currency: "SAR" }
     }
     throw new Error(`Unrecognized menu URL “${input}”. Expected an Omega or redro menu link.`)
 }
@@ -211,17 +217,6 @@ function menuUrlFor(source: MenuSource): string {
     return source.platform === "omega" ? `https://menu.omegasoftware.ca/${source.value}` : source.value
 }
 
-/** Slug from text only (transform's slugify appends an id; location slugs read better without). */
-function slugText(text: string): string {
-    return text
-        .toLowerCase()
-        .normalize("NFD")
-        .replace(/[̀-ͯ]/g, "")
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "")
-        .slice(0, 60)
-}
-
 // ─── Field value builders ───────────────────────────────────────────────────
 const str = (value: string): FieldDataInput[string] => ({ type: "string", value })
 const num = (value: number): FieldDataInput[string] => ({ type: "number", value })
@@ -245,6 +240,8 @@ export interface LocationPreview {
     brand: string
     /** The branches-collection item this menu came from (collection input only). */
     branch: Branch | null
+    /** Platform branch codes found in the data (Omega "HA"/"SS"…) — stripped by the name cleanup. */
+    branchCodes: string[]
     categories: MenuCategory[]
     sections: MenuSection[]
     items: MenuItem[]
@@ -391,7 +388,7 @@ export async function loadMenuPreview(input: MenuInput, abortSignal?: AbortSigna
 
     const results = await Promise.allSettled(
         Array.from(unique, async ([key, { source, branch }]): Promise<LocationPreview> => {
-            const { brand, categories, sections, items } = await fetchMenu(source, abortSignal)
+            const { brand, categories, sections, items, branchCodes } = await fetchMenu(source, abortSignal)
             return {
                 key,
                 source: source.value,
@@ -400,6 +397,7 @@ export async function loadMenuPreview(input: MenuInput, abortSignal?: AbortSigna
                 currency: source.currency,
                 brand,
                 branch,
+                branchCodes: branchCodes ?? [],
                 categories,
                 sections,
                 items,
@@ -482,6 +480,7 @@ interface SectionRow {
 interface ItemRow {
     id: string
     slug: string
+    title: string
     item: MenuItem
     currency: string
     locationId: string
@@ -495,7 +494,15 @@ interface MenuRows {
     items: ItemRow[]
 }
 
-/** Every venue's menu as one set of rows with location-scoped ids + slugs (unfiltered). */
+/** A category/section/item name as it will be imported (cleaned when the option is on). */
+export function displayName(name: string, location: LocationPreview, config: ImportConfig): string {
+    return config.cleanNames ? cleanMenuName(name, location.branchCodes) : name
+}
+
+/**
+ * Every venue's menu as one set of rows with location-scoped ids (unfiltered). Slugs are readable —
+ * "{location}-{name}" — and made unique per collection with "-2", "-3"… only where names clash.
+ */
 function flatten(preview: MenuPreview, config: ImportConfig): MenuRows {
     const rows: MenuRows = { locations: [], categories: [], sections: [], items: [] }
     const usedSlugs = new Set<string>()
@@ -508,6 +515,9 @@ function flatten(preview: MenuPreview, config: ImportConfig): MenuRows {
 
         const locationId = location.key
         const scoped = (id: string | number) => scopedId(location.key, id)
+        const clean = (text: string) => displayName(text, location, config)
+        const slugFor = (text: string, fallback: string) => `${slug}-${slugText(text) || fallback}`
+
         rows.locations.push({
             id: locationId,
             slug,
@@ -519,19 +529,21 @@ function flatten(preview: MenuPreview, config: ImportConfig): MenuRows {
             sortOrder: index + 1,
         })
         location.categories.forEach((category, categoryIndex) => {
+            const title = clean(category.name)
             rows.categories.push({
                 id: scoped(category.id),
-                slug: `${slug}-${slugText(category.name) || "category"}-${category.id}`,
-                name: category.name,
+                slug: slugFor(title, "category"),
+                name: title,
                 locationId,
                 sortOrder: categoryIndex + 1,
             })
         })
         for (const section of location.sections) {
+            const title = clean(section.title)
             rows.sections.push({
                 id: scoped(section.omegaId),
-                slug: `${slug}-${section.slug}`,
-                title: section.title,
+                slug: slugFor(title, "section"),
+                title,
                 comment: section.comment,
                 locationId,
                 categoryId: scoped(section.categoryId),
@@ -539,9 +551,11 @@ function flatten(preview: MenuPreview, config: ImportConfig): MenuRows {
             })
         }
         for (const item of location.items) {
+            const title = clean(item.title)
             rows.items.push({
                 id: scoped(item.omegaId),
-                slug: `${slug}-${item.slug}`,
+                slug: slugFor(title, "item"),
+                title,
                 item,
                 currency: location.currency,
                 locationId,
@@ -550,6 +564,10 @@ function flatten(preview: MenuPreview, config: ImportConfig): MenuRows {
             })
         }
     })
+
+    uniquifySlugs(rows.categories)
+    uniquifySlugs(rows.sections)
+    uniquifySlugs(rows.items)
     return rows
 }
 
@@ -750,7 +768,7 @@ function cmsItems(
             return rows.items.map(row => {
                 const { item } = row
                 const fieldData: FieldDataInput = {
-                    title: str(item.title),
+                    title: str(row.title),
                     description: str(item.description),
                     priceNote: str(item.priceNote),
                     currency: str(row.currency),

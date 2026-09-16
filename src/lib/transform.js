@@ -63,6 +63,10 @@ export function transform(data) {
     const categoryName = new Map(categories.map((c) => [c.id, c.name]))
     const sections = []
     const items = []
+    // Omega prefixes item groups with the code of the branch they belong to ("HA-Salads",
+    // "SS-Salads"), and that code leaks into item names ("CHICKEN BAO-SS"). Collected so the
+    // optional name cleanup can strip exactly these codes.
+    const branchCodes = new Set()
 
     data.menu.forEach((section, sIdx) => {
         const catId = section.CATEGORYID?.[0] ?? section.groups?.[0]?.CATEGORYID ?? 1
@@ -76,6 +80,8 @@ export function transform(data) {
             sortOrder: sIdx + 1,
         })
         for (const group of section.groups || []) {
+            const code = /^([A-Z]{2,3})-/.exec(group.GROUPNAME || "")?.[1]
+            if (code) branchCodes.add(code)
             ;(group.items || []).forEach((item, iIdx) => {
                 const { description, priceNote } = splitPriceNote(item)
                 items.push({
@@ -96,5 +102,5 @@ export function transform(data) {
             })
         }
     })
-    return { brand, categories, sections, items }
+    return { brand, categories, sections, items, branchCodes: Array.from(branchCodes) }
 }

@@ -47,6 +47,8 @@ export interface TransformResult {
     categories: MenuCategory[]
     sections: MenuSection[]
     items: MenuItem[]
+    /** Branch codes from Omega group-name prefixes ("HA", "SS"…); absent for redro. */
+    branchCodes?: string[]
 }
 
 export function slugify(text: unknown, id: number | string): string
