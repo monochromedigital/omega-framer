@@ -20,6 +20,9 @@ Each menu becomes a Location, so a single page template on Menu Locations render
 
 - **One-click import** of every menu into four plugin-managed collections with a shared prefix:
   `{{Prefix}}-Menu Locations`, `-Menu Categories`, `-Menu Sections`, `-Menu Items`.
+- **Menu links from your own CMS** — keep a Branches collection (name, menu link, address…) and
+  import from it instead of pasting links; each Menu Location links back to its branch, and
+  resync picks up branches you add or remove.
 - **4-level hierarchy, linked both ways** — child→parent references *and* parent→children
   multi-references, so you can nest Collection Lists (source an inner list from *Current
   Item's Sections / Items*).

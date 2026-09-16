@@ -79,6 +79,8 @@ export const PLUGIN_KEYS = {
     MENU_SOURCES: "menuSources",
     /** Shared by the collections of one import, so separate imports never reuse each other's. */
     GROUP_ID: "groupId",
+    /** JSON BranchesSource when the menu links are read from a user's branches collection. */
+    BRANCHES: "branchesSource",
     IMPORT_CONFIG: "importConfig",
 } as const
 
@@ -241,6 +243,8 @@ export interface LocationPreview {
     currency: string
     /** Venue name from the menu data. */
     brand: string
+    /** The branches-collection item this menu came from (collection input only). */
+    branch: Branch | null
     categories: MenuCategory[]
     sections: MenuSection[]
     items: MenuItem[]
@@ -248,6 +252,11 @@ export interface LocationPreview {
 
 export interface MenuPreview {
     locations: LocationPreview[]
+    /** Set when the links were read from a branches collection (persisted for resync). */
+    branches: BranchesSource | null
+    branchesCollectionName: string | null
+    /** Branch items left out: drafts, or no menu link. */
+    skippedBranches: number
 }
 
 /** Fetch one menu through the worker. Both platforms yield the shared shape:
@@ -271,22 +280,117 @@ async function fetchMenu(source: MenuSource, abortSignal?: AbortSignal): Promise
     return transform(await response.json())
 }
 
+// ─── Branches collection (menu links read from the user's own CMS collection) ─
+/** Where to read branches from: a user collection + the fields holding the menu link and name. */
+export interface BranchesSource {
+    collectionId: string
+    urlFieldId: string
+    /** Plain-text field with the branch name; null → the item's slug. */
+    nameFieldId: string | null
+}
+
+export interface Branch {
+    /** The branch's CMS item id (the Menu Location's "Branch" reference points at it). */
+    itemId: string
+    name: string
+}
+
+export interface FieldOption {
+    id: string
+    name: string
+}
+
+export interface BranchCollectionOption {
+    id: string
+    name: string
+    /** Fields that can hold a menu link (Link or Plain Text). */
+    linkFields: FieldOption[]
+    /** Fields that can hold the branch name (Plain Text). */
+    nameFields: FieldOption[]
+}
+
+/** The user's own (non-plugin) collections, with the fields usable for links and names. */
+export async function listBranchCollections(): Promise<BranchCollectionOption[]> {
+    const collections = (await framer.getCollections()).filter(collection => collection.managedBy === "user")
+    return Promise.all(
+        collections.map(async collection => {
+            const fields = await collection.getFields()
+            const option = (field: { id: string; name: string }) => ({ id: field.id, name: field.name })
+            return {
+                id: collection.id,
+                name: collection.name,
+                linkFields: fields.filter(field => field.type === "link" || field.type === "string").map(option),
+                nameFields: fields.filter(field => field.type === "string").map(option),
+            }
+        })
+    )
+}
+
+/** Pick the field whose name matches (e.g. /menu/ for the link), else the first field. */
+export function guessField(fields: FieldOption[], pattern: RegExp): FieldOption | null {
+    return fields.find(field => pattern.test(field.name)) ?? fields[0] ?? null
+}
+
+async function readBranches(branches: BranchesSource) {
+    const collection = await framer.getCollection(branches.collectionId)
+    if (!collection) throw new Error("The branches collection was not found — choose it again.")
+
+    const entries: { link: string; branch: Branch }[] = []
+    let skipped = 0
+    for (const item of await collection.getItems()) {
+        const linkEntry = item.fieldData[branches.urlFieldId]
+        const link = linkEntry?.type === "link" || linkEntry?.type === "string" ? (linkEntry.value ?? "").trim() : ""
+        if (item.draft || !link) {
+            skipped++
+            continue
+        }
+        const nameEntry = branches.nameFieldId ? item.fieldData[branches.nameFieldId] : undefined
+        const name = (nameEntry?.type === "string" ? nameEntry.value.trim() : "") || item.slug
+        entries.push({ link, branch: { itemId: item.id, name } })
+    }
+    return { collectionName: collection.name, entries, skipped }
+}
+
+/** What to load: pasted links, or the menu links in a branches collection. */
+export type MenuInput = { kind: "links"; links: string[] } | { kind: "collection"; branches: BranchesSource }
+
 /**
  * Fetch every menu (in parallel). All-or-nothing: if any menu fails, this throws before anything
  * is written, so a flaky source can never wipe that venue's rows during a sync.
  */
-export async function loadMenuPreview(inputs: string[], abortSignal?: AbortSignal): Promise<MenuPreview> {
-    if (inputs.length === 0) throw new Error("Paste at least one menu link.")
-
-    const unique = new Map<string, MenuSource>()
-    for (const input of inputs) {
-        const source = parseMenuSource(input)
-        const key = locationKey(source)
-        if (!unique.has(key)) unique.set(key, source)
+export async function loadMenuPreview(input: MenuInput, abortSignal?: AbortSignal): Promise<MenuPreview> {
+    let entries: { link: string; branch: Branch | null }[]
+    let branchesCollectionName: string | null = null
+    let skippedBranches = 0
+    if (input.kind === "links") {
+        entries = input.links.map(link => ({ link, branch: null }))
+        if (entries.length === 0) throw new Error("Paste at least one menu link.")
+    } else {
+        const read = await readBranches(input.branches)
+        entries = read.entries
+        branchesCollectionName = read.collectionName
+        skippedBranches = read.skipped
+        if (entries.length === 0) {
+            throw new Error(`No branches in “${read.collectionName}” have a menu link in the chosen field.`)
+        }
     }
 
+    const errors: string[] = []
+    const unique = new Map<string, { source: MenuSource; branch: Branch | null }>()
+    for (const { link, branch } of entries) {
+        try {
+            const source = parseMenuSource(link)
+            const key = locationKey(source)
+            if (!unique.has(key)) unique.set(key, { source, branch })
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            errors.push(branch ? `${branch.name}: ${message}` : message)
+        }
+    }
+    if (errors.length > 0) throw new Error(errors.join("\n"))
+
     const results = await Promise.allSettled(
-        Array.from(unique, async ([key, source]): Promise<LocationPreview> => {
+        Array.from(unique, async ([key, { source, branch }]): Promise<LocationPreview> => {
             const { brand, categories, sections, items } = await fetchMenu(source, abortSignal)
             return {
                 key,
@@ -295,6 +399,7 @@ export async function loadMenuPreview(inputs: string[], abortSignal?: AbortSigna
                 platform: source.platform,
                 currency: source.currency,
                 brand,
+                branch,
                 categories,
                 sections,
                 items,
@@ -302,20 +407,25 @@ export async function loadMenuPreview(inputs: string[], abortSignal?: AbortSigna
         })
     )
 
-    const errors = results.flatMap(result =>
-        result.status === "rejected"
-            ? [result.reason instanceof Error ? result.reason.message : String(result.reason)]
-            : []
-    )
+    for (const result of results) {
+        if (result.status === "rejected") {
+            errors.push(result.reason instanceof Error ? result.reason.message : String(result.reason))
+        }
+    }
     if (errors.length > 0) throw new Error(errors.join("\n"))
 
     return {
         locations: results.flatMap(result => (result.status === "fulfilled" ? [result.value] : [])),
+        branches: input.kind === "collection" ? input.branches : null,
+        branchesCollectionName,
+        skippedBranches,
     }
 }
 
 // ─── Naming ──────────────────────────────────────────────────────────────────
 export function locationName(location: LocationPreview, config: ImportConfig): string {
+    // A branches collection is the source of truth for names (edit them in the CMS).
+    if (location.branch) return location.branch.name
     return config.locationNames[location.key]?.trim() || location.brand || location.key
 }
 
@@ -350,6 +460,7 @@ interface LocationRow {
     platform: Platform
     currency: string
     menuUrl: string
+    branchItemId: string | null
     sortOrder: number
 }
 interface CategoryRow {
@@ -404,6 +515,7 @@ function flatten(preview: MenuPreview, config: ImportConfig): MenuRows {
             platform: location.platform,
             currency: location.currency,
             menuUrl: location.menuUrl,
+            branchItemId: location.branch?.itemId ?? null,
             sortOrder: index + 1,
         })
         location.categories.forEach((category, categoryIndex) => {
@@ -483,7 +595,11 @@ export function scopedSectionId(location: LocationPreview, section: MenuSection)
 }
 
 // ─── Schema (fields) ─────────────────────────────────────────────────────────
-type CollectionIds = Record<Exclude<Level, "items">, string | null> & { items: string }
+type CollectionIds = Record<Exclude<Level, "items">, string | null> & {
+    items: string
+    /** The user's branches collection, when Menu Locations link back to it (null = no Branch field). */
+    branches: string | null
+}
 
 /** The level directly below `level` that is being synced (down multi-references point at it). */
 function childLevel(level: Level, ids: CollectionIds): Level | null {
@@ -548,7 +664,11 @@ function fieldsFor(level: Level, ids: CollectionIds): ManagedCollectionFieldInpu
             { id: "sortOrder", name: "Sort Order", type: "number" },
         ],
     }
-    return [...own[level], ...upFields(level, ids), ...downField(level, ids)]
+    const branch: ManagedCollectionFieldInput[] =
+        level === "locations" && ids.branches
+            ? [{ id: "branch", name: "Branch", type: "collectionReference", collectionId: ids.branches }]
+            : []
+    return [...own[level], ...branch, ...upFields(level, ids), ...downField(level, ids)]
 }
 
 // ─── Rows → CMS items ────────────────────────────────────────────────────────
@@ -603,6 +723,7 @@ function cmsItems(
                         platform: str(row.platform),
                         currency: str(row.currency),
                         menuUrl: link(row.menuUrl),
+                        ...(ids.branches && row.branchItemId ? { branch: ref(row.branchItemId) } : {}),
                     },
                     {}
                 )
@@ -658,6 +779,8 @@ export interface StoredSync {
     level: Level
     groupId: string | null
     sources: string[]
+    /** Set when the menu links are read from a branches collection (resync re-reads it). */
+    branches: BranchesSource | null
     config: ImportConfig
 }
 
@@ -666,13 +789,28 @@ function levelOf(dataSourceId: string | null): Level {
 }
 
 export async function readStoredSync(collection: ManagedCollection): Promise<StoredSync> {
-    const [dataSourceId, legacySource, rawSources, groupId, rawConfig] = await Promise.all([
+    const [dataSourceId, legacySource, rawSources, groupId, rawBranches, rawConfig] = await Promise.all([
         collection.getPluginData(PLUGIN_KEYS.DATA_SOURCE_ID),
         collection.getPluginData(PLUGIN_KEYS.CUSTOMER_ID),
         collection.getPluginData(PLUGIN_KEYS.MENU_SOURCES),
         collection.getPluginData(PLUGIN_KEYS.GROUP_ID),
+        collection.getPluginData(PLUGIN_KEYS.BRANCHES),
         collection.getPluginData(PLUGIN_KEYS.IMPORT_CONFIG),
     ])
+
+    let branches: BranchesSource | null = null
+    try {
+        const parsed = rawBranches ? (JSON.parse(rawBranches) as Partial<BranchesSource>) : null
+        if (parsed?.collectionId && parsed.urlFieldId) {
+            branches = {
+                collectionId: parsed.collectionId,
+                urlFieldId: parsed.urlFieldId,
+                nameFieldId: parsed.nameFieldId ?? null,
+            }
+        }
+    } catch {
+        // ignore — falls back to the stored links
+    }
 
     let sources: string[] = []
     try {
@@ -698,6 +836,7 @@ export async function readStoredSync(collection: ManagedCollection): Promise<Sto
         level: levelOf(dataSourceId),
         groupId: groupId ?? legacySource,
         sources,
+        branches,
         config: parseImportConfig(rawConfig, legacyLocationKey),
     }
 }
@@ -791,9 +930,9 @@ async function resolveCollections(
  */
 async function runSync(
     collections: Collections,
+    preview: MenuPreview,
     rows: MenuRows,
     groupId: string,
-    sources: string[],
     config: ImportConfig
 ) {
     const items = collections.items
@@ -803,22 +942,45 @@ async function runSync(
         categories: collections.categories?.id ?? null,
         sections: collections.sections?.id ?? null,
         items: items.id,
+        branches: preview.branches?.collectionId ?? null,
     }
     const synced = LEVELS.flatMap(level => {
         const collection = collections[level]
         return collection ? [{ level, collection }] : []
     })
 
-    for (const { level, collection } of synced) await collection.setFields(fieldsFor(level, ids))
-    for (const { level, collection } of synced) await replaceItems(collection, cmsItems(level, rows, ids, false))
+    // Pass 1, level by level (parents first): fields, then rows + up-references, stale rows removed.
+    for (const { level, collection } of synced) {
+        try {
+            await collection.setFields(fieldsFor(level, ids))
+            await replaceItems(collection, cmsItems(level, rows, ids, false))
+        } catch (error) {
+            // A reference into the user's own branches collection is the one link we can't verify up
+            // front. If Framer rejects it, import without the Branch field rather than failing.
+            if (level !== "locations" || !ids.branches) throw error
+            console.warn("Branch reference rejected; importing Menu Locations without it.", error)
+            framer.notify(
+                "Couldn’t link Menu Locations to your branches collection — imported without the Branch field.",
+                {
+                    variant: "warning",
+                }
+            )
+            ids.branches = null
+            await collection.setFields(fieldsFor(level, ids))
+            await replaceItems(collection, cmsItems(level, rows, ids, false))
+        }
+    }
+    // Pass 2 — parent→children down multi-references (every child now exists).
     for (const { level, collection } of synced) {
         if (childLevel(level, ids)) await collection.addItems(cmsItems(level, rows, ids, true))
     }
 
+    const sources = preview.locations.map(location => location.source)
     for (const { level, collection } of synced) {
         await collection.setPluginData(PLUGIN_KEYS.DATA_SOURCE_ID, LEVEL_SOURCE[level])
         await collection.setPluginData(PLUGIN_KEYS.GROUP_ID, groupId)
         await collection.setPluginData(PLUGIN_KEYS.MENU_SOURCES, JSON.stringify(sources))
+        await collection.setPluginData(PLUGIN_KEYS.BRANCHES, preview.branches ? JSON.stringify(preview.branches) : null)
         await collection.setPluginData(PLUGIN_KEYS.IMPORT_CONFIG, JSON.stringify(config))
         await collection.setPluginData(PLUGIN_KEYS.CUSTOMER_ID, null)
     }
@@ -858,8 +1020,7 @@ export async function importMenu(
     const groupId = stored.groupId ?? crypto.randomUUID()
     const prefix = collectionPrefix(preview, config)
     const collections = await resolveCollections(active, stored.level, groupId, prefix, config, true)
-    const sources = preview.locations.map(location => location.source)
-    await runSync(collections, applyConfig(preview, config), groupId, sources, config)
+    await runSync(collections, preview, applyConfig(preview, config), groupId, config)
 }
 
 /**
@@ -870,7 +1031,8 @@ export async function syncExistingCollection(
     active: ManagedCollection,
     stored: StoredSync
 ): Promise<{ didSync: boolean }> {
-    if (!stored.dataSourceId || !stored.groupId || stored.sources.length === 0) return { didSync: false }
+    if (!stored.dataSourceId || !stored.groupId) return { didSync: false }
+    if (!stored.branches && stored.sources.length === 0) return { didSync: false }
     if (framer.mode !== "syncManagedCollection") return { didSync: false }
     if (!LEVELS.some(level => LEVEL_SOURCE[level] === stored.dataSourceId)) return { didSync: false }
 
@@ -883,10 +1045,14 @@ export async function syncExistingCollection(
 
     try {
         const { config, groupId } = stored
-        const preview = await loadMenuPreview(stored.sources)
+        // A branches collection is re-read, so branches added in the CMS are picked up on resync.
+        const input: MenuInput = stored.branches
+            ? { kind: "collection", branches: stored.branches }
+            : { kind: "links", links: stored.sources }
+        const preview = await loadMenuPreview(input)
         const prefix = collectionPrefix(preview, config)
         const collections = await resolveCollections(active, stored.level, groupId, prefix, config, false)
-        await runSync(collections, applyConfig(preview, config), groupId, stored.sources, config)
+        await runSync(collections, preview, applyConfig(preview, config), groupId, config)
         return { didSync: true }
     } catch (error) {
         console.error(error)

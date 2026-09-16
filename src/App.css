@@ -401,3 +401,46 @@ input[type="text"]:disabled,
 .configure .indent {
     padding-left: 14px;
 }
+
+/* ─── Input mode toggle + branches collection pickers ─────────────────────── */
+.segmented {
+    display: flex;
+    width: 100%;
+    padding: 2px;
+    gap: 2px;
+    border-radius: 8px;
+    background-color: var(--framer-color-bg-tertiary);
+}
+
+.segmented button {
+    flex: 1;
+    width: auto;
+    height: 26px;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--framer-color-text-tertiary);
+    font-weight: 500;
+}
+
+.segmented button.active {
+    background-color: var(--framer-color-bg);
+    color: var(--framer-color-text);
+}
+
+.setup form select {
+    width: 150px;
+    font-weight: 500;
+}
+
+.setup .field-hint {
+    color: var(--framer-color-text-tertiary);
+    text-align: center;
+    line-height: 1.4;
+    padding: 12px 0;
+}
+
+.configure .location-name {
+    color: var(--framer-color-text);
+    font-weight: 500;
+    padding: 4px 2px 0;
+}

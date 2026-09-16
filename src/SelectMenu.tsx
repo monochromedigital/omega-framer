@@ -1,15 +1,34 @@
 import { framer } from "@framer/plugin"
 import { useEffect, useRef, useState } from "react"
-import { loadMenuPreview, type MenuPreview, PROVIDERS, splitMenuInput } from "./data"
+import {
+    type BranchCollectionOption,
+    type BranchesSource,
+    guessField,
+    listBranchCollections,
+    loadMenuPreview,
+    type MenuInput,
+    type MenuPreview,
+    PROVIDERS,
+    splitMenuInput,
+} from "./data"
 
 interface SelectMenuProps {
     onLoaded: (preview: MenuPreview) => void
     initialValue?: string
+    /** Pre-selects "From a collection" when the import was set up from a branches collection. */
+    initialBranches?: BranchesSource | null
 }
 
-export function SelectMenu({ onLoaded, initialValue = "" }: SelectMenuProps) {
+type InputMode = "links" | "collection"
+
+export function SelectMenu({ onLoaded, initialValue = "", initialBranches = null }: SelectMenuProps) {
+    const [mode, setMode] = useState<InputMode>(initialBranches ? "collection" : "links")
     const [customerInput, setCustomerInput] = useState(initialValue)
     const [isLoading, setIsLoading] = useState(false)
+
+    // "From a collection": the user's own collections + the chosen collection/fields.
+    const [collections, setCollections] = useState<BranchCollectionOption[] | null>(null)
+    const [branches, setBranches] = useState<BranchesSource | null>(initialBranches)
 
     // Ignore an in-flight load if the plugin/UI unmounts (abort the fetch + skip any setState).
     const abortRef = useRef<AbortController | null>(null)
@@ -22,7 +41,32 @@ export function SelectMenu({ onLoaded, initialValue = "" }: SelectMenuProps) {
         }
     }, [])
 
+    useEffect(() => {
+        if (mode !== "collection" || collections) return
+        listBranchCollections()
+            .then(options => {
+                if (!mountedRef.current) return
+                setCollections(options)
+                // Keep a saved choice if its collection still exists; otherwise preselect the first.
+                setBranches(current =>
+                    current && options.some(option => option.id === current.collectionId)
+                        ? current
+                        : options[0]
+                          ? branchesFor(options[0])
+                          : null
+                )
+            })
+            .catch((error: unknown) => {
+                console.error(error)
+                framer.notify("Couldn’t read this project’s collections.", { variant: "error" })
+            })
+    }, [mode, collections])
+
+    const selected = collections?.find(option => option.id === branches?.collectionId) ?? null
     const linkCount = splitMenuInput(customerInput).length
+
+    const canSubmit =
+        !isLoading && (mode === "links" ? linkCount > 0 : Boolean(branches?.collectionId && branches.urlFieldId))
 
     const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault()
@@ -31,9 +75,17 @@ export function SelectMenu({ onLoaded, initialValue = "" }: SelectMenuProps) {
         const controller = new AbortController()
         abortRef.current = controller
 
+        const input: MenuInput | null =
+            mode === "links"
+                ? { kind: "links", links: splitMenuInput(customerInput) }
+                : branches
+                  ? { kind: "collection", branches }
+                  : null
+        if (!input) return
+
         try {
             setIsLoading(true)
-            const preview = await loadMenuPreview(splitMenuInput(customerInput), controller.signal)
+            const preview = await loadMenuPreview(input, controller.signal)
             if (!mountedRef.current || controller.signal.aborted) return
             onLoaded(preview)
         } catch (error) {
@@ -58,7 +110,7 @@ export function SelectMenu({ onLoaded, initialValue = "" }: SelectMenuProps) {
                 </div>
                 <div className="content">
                     <h2>Restaurant Menu Import</h2>
-                    <p>Paste one menu link per line — each becomes a location — then choose what to import.</p>
+                    <p>Add menu links — each becomes a location — then choose what to import.</p>
                 </div>
             </div>
 
@@ -72,25 +124,129 @@ export function SelectMenu({ onLoaded, initialValue = "" }: SelectMenuProps) {
                 ))}
             </div>
 
+            <div className="segmented" role="tablist">
+                <button
+                    type="button"
+                    role="tab"
+                    aria-selected={mode === "links"}
+                    className={mode === "links" ? "active" : ""}
+                    onClick={() => setMode("links")}
+                    disabled={isLoading}
+                >
+                    Paste links
+                </button>
+                <button
+                    type="button"
+                    role="tab"
+                    aria-selected={mode === "collection"}
+                    className={mode === "collection" ? "active" : ""}
+                    onClick={() => setMode("collection")}
+                    disabled={isLoading}
+                >
+                    From a collection
+                </button>
+            </div>
+
             <form onSubmit={handleSubmit}>
-                <label htmlFor="customer" className="links">
-                    <textarea
-                        id="customer"
-                        rows={5}
-                        placeholder={"Paste menu links, one per line"}
-                        value={customerInput}
-                        onChange={event => setCustomerInput(event.target.value)}
-                        autoComplete="off"
-                        autoCapitalize="off"
-                        autoCorrect="off"
-                        spellCheck={false}
-                        disabled={isLoading}
-                    />
-                </label>
-                <button type="submit" disabled={!customerInput.trim() || isLoading}>
-                    {isLoading ? <div className="framer-spinner" /> : linkCount > 1 ? `Load ${linkCount} menus` : "Next"}
+                {mode === "links" ? (
+                    <label htmlFor="customer" className="links">
+                        <textarea
+                            id="customer"
+                            rows={5}
+                            placeholder={"Paste menu links, one per line"}
+                            value={customerInput}
+                            onChange={event => setCustomerInput(event.target.value)}
+                            autoComplete="off"
+                            autoCapitalize="off"
+                            autoCorrect="off"
+                            spellCheck={false}
+                            disabled={isLoading}
+                        />
+                    </label>
+                ) : collections === null ? (
+                    <div className="field-hint">Loading collections…</div>
+                ) : collections.length === 0 ? (
+                    <div className="field-hint">
+                        No collections yet. Create one in the CMS with a branch name and a menu link field.
+                    </div>
+                ) : (
+                    <>
+                        <label>
+                            <span>Collection</span>
+                            <select
+                                value={branches?.collectionId ?? ""}
+                                onChange={event => {
+                                    const option = collections.find(c => c.id === event.target.value)
+                                    setBranches(option ? branchesFor(option) : null)
+                                }}
+                                disabled={isLoading}
+                            >
+                                {collections.map(option => (
+                                    <option key={option.id} value={option.id}>
+                                        {option.name}
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+                        <label>
+                            <span>Menu link</span>
+                            <select
+                                value={branches?.urlFieldId ?? ""}
+                                onChange={event =>
+                                    setBranches(current => current && { ...current, urlFieldId: event.target.value })
+                                }
+                                disabled={isLoading || !selected?.linkFields.length}
+                            >
+                                {!selected?.linkFields.length && <option value="">No link or text fields</option>}
+                                {selected?.linkFields.map(field => (
+                                    <option key={field.id} value={field.id}>
+                                        {field.name}
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+                        <label>
+                            <span>Branch name</span>
+                            <select
+                                value={branches?.nameFieldId ?? ""}
+                                onChange={event =>
+                                    setBranches(
+                                        current => current && { ...current, nameFieldId: event.target.value || null }
+                                    )
+                                }
+                                disabled={isLoading}
+                            >
+                                <option value="">Slug</option>
+                                {selected?.nameFields.map(field => (
+                                    <option key={field.id} value={field.id}>
+                                        {field.name}
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+                    </>
+                )}
+                <button type="submit" disabled={!canSubmit}>
+                    {isLoading ? (
+                        <div className="framer-spinner" />
+                    ) : mode === "links" && linkCount > 1 ? (
+                        `Load ${linkCount} menus`
+                    ) : mode === "collection" && selected ? (
+                        `Load from ${selected.name}`
+                    ) : (
+                        "Next"
+                    )}
                 </button>
             </form>
         </main>
     )
+}
+
+/** Default field choice for a collection: a field named like "menu"/"link"/"url", and "name"/"title". */
+function branchesFor(option: BranchCollectionOption): BranchesSource {
+    return {
+        collectionId: option.id,
+        urlFieldId: guessField(option.linkFields, /menu|link|url/i)?.id ?? "",
+        nameFieldId: guessField(option.nameFields, /name|title|branch/i)?.id ?? null,
+    }
 }

@@ -137,18 +137,30 @@ export function ConfigureImport({ collection, stored, preview, initialConfig, on
                     <h3>Locations</h3>
                     {preview.locations.map(location => (
                         <div key={location.key} className="location">
-                            <input
-                                type="text"
-                                value={config.locationNames[location.key] ?? location.brand}
-                                placeholder={location.brand || location.key}
-                                onChange={e => setLocationName(location.key, e.target.value)}
-                            />
+                            {location.branch ? (
+                                // Names come from the branches collection — edit them in the CMS.
+                                <span className="location-name">{location.branch.name}</span>
+                            ) : (
+                                <input
+                                    type="text"
+                                    value={config.locationNames[location.key] ?? location.brand}
+                                    placeholder={location.brand || location.key}
+                                    onChange={e => setLocationName(location.key, e.target.value)}
+                                />
+                            )}
                             <span className="meta">
                                 {PLATFORM_LABEL[location.platform]} · {location.items.length} items ·{" "}
                                 {location.currency}
                             </span>
                         </div>
                     ))}
+                    {preview.branchesCollectionName && (
+                        <p className="hint">
+                            From <code>{preview.branchesCollectionName}</code> — each location links back to its branch.
+                            {preview.skippedBranches > 0 &&
+                                ` ${preview.skippedBranches} skipped (draft or no menu link).`}
+                        </p>
+                    )}
                 </section>
 
                 <section>

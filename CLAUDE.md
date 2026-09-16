@@ -60,6 +60,15 @@ numbers), and `Currency` (plain text) fields; image/calories are written only wh
   redro locations share category/section slugs), so every row id is `{locationKey}:{menuId}`
   and slugs are prefixed with the location slug. `locationKey` = Omega customer id, or
   `{sub}-{location}` for redro.
+- **Menu links from a branches collection (optional).** Instead of pasting links, the setup screen
+  can read a user-created collection (`framer.getCollections()` filtered to `managedBy === "user"`):
+  the user picks the Link/Plain Text field holding the menu link and the Plain Text name field.
+  Drafts and items with no link are skipped. The choice is stored as plugin data
+  (`branchesSource`) and re-read on resync, so branches added/removed in the CMS flow through.
+  Location names then come from the branch (not editable in the plugin), and Menu Locations get a
+  `Branch` collectionReference to the branch item. Referencing a user collection from a managed
+  one is unverified in the editor → if `setFields`/`addItems` rejects it, the Locations level is
+  re-synced without the Branch field and a warning is shown.
 - **All-or-nothing fetch.** Every menu is fetched before anything is written; if one fails, the
   sync aborts, so a flaky source never wipes that venue's rows.
 - **Naming: `{{Prefix}}-{{Collection}}`.** Prefix defaults to the venue name (one menu) or the most
@@ -123,6 +132,8 @@ Deployed on Vercel (Monochrome team): `https://worker-monochrome-dev.vercel.app`
 (`/menu/{id}`, `/data/{id}`). Deploys via `vercel --prod` from `worker/` (the Monochrome
 Vercel team is Hobby plan → no Git auto-deploy for private/org repos; this repo is public
 now, so Git integration may be reconnectable). `VITE_WORKER_BASE` overrides the base at build.
+`/redro` was first deployed 2026-09-16 (before that, redro imports 404'd); the deploy also
+aliases `worker-self.vercel.app`, and the plugin still uses `worker-monochrome-dev.vercel.app`.
 Note: `/data/{id}` returns `0` (needs the correct getRestaurantData payload) — non-blocking,
 branch info is embedded in `/menu`.
 
@@ -137,8 +148,8 @@ npm run build      # dist/
 
 ## Current state
 
-**Multi-location import** (Locations level, scoped ids, groupId) is verified only in a mock-CMS
-simulation with the five Amar menus — not yet in the Framer editor.
+**Multi-location import** (Locations level, scoped ids, groupId, branches collection input) is
+verified only in a mock-CMS simulation with the five Amar menus — not yet in the Framer editor.
 **Verified in the Framer editor (CMS flow), single-menu version:** import creates + populates the
 three collections (Items = the active collection, plus `{{Brand}}-Menu Categories` / `Sections`); tsc/eslint/build
 all clean. A canvas (Plugins-menu) launch correctly shows the OpenFromCMS guard. Still to check:

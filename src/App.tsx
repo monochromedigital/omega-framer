@@ -20,7 +20,7 @@ export function App({ collection, stored }: AppProps) {
         framer.showUI({
             width: configuring ? 340 : 300,
             // The setup screen lists the supported providers and a multi-line links box.
-            height: configuring ? 560 : 470,
+            height: configuring ? 560 : 500,
             minWidth: configuring ? 320 : undefined,
             minHeight: configuring ? 400 : undefined,
             resizable: configuring,
@@ -28,7 +28,13 @@ export function App({ collection, stored }: AppProps) {
     }, [preview])
 
     if (!preview) {
-        return <SelectMenu onLoaded={setPreview} initialValue={stored.sources.join("\n")} />
+        return (
+            <SelectMenu
+                onLoaded={setPreview}
+                initialValue={stored.branches ? "" : stored.sources.join("\n")}
+                initialBranches={stored.branches}
+            />
+        )
     }
 
     return (
