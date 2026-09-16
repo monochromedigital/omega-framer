@@ -384,18 +384,29 @@ async function setSyncMeta(collection: ManagedCollection, dataSourceId: string, 
     await collection.setPluginData(PLUGIN_KEYS.IMPORT_CONFIG, JSON.stringify(config))
 }
 
-/** Find a managed collection this plugin uses for the given data source (by plugin data, then name). */
-async function findCollectionBySource(source: string, name: string): Promise<ManagedCollection | null> {
+/**
+ * Find the managed collection this plugin uses for a data source (Categories/Sections/Items) OF A
+ * GIVEN MENU. Matching on the data source id alone isn't enough: every imported venue shares the
+ * same ids ("menu-categories"…), so a second venue's import would reuse — and overwrite — the first
+ * venue's Categories/Sections. Match on (data source, menu source), then fall back to the branded
+ * name, but only for a collection not already bound to a different menu.
+ */
+async function findCollectionBySource(source: string, menuSource: string, name: string): Promise<ManagedCollection | null> {
     const collections = await framer.getManagedCollections()
+    const boundMenus = new Map<ManagedCollection, string | null>()
     for (const collection of collections) {
         try {
-            if ((await collection.getPluginData(PLUGIN_KEYS.DATA_SOURCE_ID)) === source) return collection
+            const dataSourceId = await collection.getPluginData(PLUGIN_KEYS.DATA_SOURCE_ID)
+            const boundMenu = await collection.getPluginData(PLUGIN_KEYS.CUSTOMER_ID)
+            boundMenus.set(collection, boundMenu)
+            if (dataSourceId === source && boundMenu === menuSource) return collection
         } catch {
             // ignore collections we can't read
         }
     }
     for (const collection of collections) {
-        if (collection.name === name) return collection
+        const boundMenu = boundMenus.get(collection)
+        if (collection.name === name && (!boundMenu || boundMenu === menuSource)) return collection
     }
     return null
 }
@@ -425,8 +436,8 @@ async function createCollectionWithUniqueName(baseName: string): Promise<Managed
     throw new Error(`Could not create a uniquely named collection for “${baseName}”.`)
 }
 
-async function getOrCreateCollection(source: string, name: string): Promise<ManagedCollection> {
-    return (await findCollectionBySource(source, name)) ?? (await createCollectionWithUniqueName(name))
+async function getOrCreateCollection(source: string, menuSource: string, name: string): Promise<ManagedCollection> {
+    return (await findCollectionBySource(source, menuSource, name)) ?? (await createCollectionWithUniqueName(name))
 }
 
 /**
@@ -509,10 +520,10 @@ export async function importMenu(itemsCollection: ManagedCollection, menuSource:
     const { categories, sections, items } = applyConfig(preview, config)
 
     const categoriesCollection = config.levels.categories
-        ? await getOrCreateCollection(CATEGORIES_SOURCE, brandedCollectionName(base, CATEGORIES_COLLECTION_NAME))
+        ? await getOrCreateCollection(CATEGORIES_SOURCE, preview.source, brandedCollectionName(base, CATEGORIES_COLLECTION_NAME))
         : null
     const sectionsCollection = config.levels.sections
-        ? await getOrCreateCollection(SECTIONS_SOURCE, brandedCollectionName(base, SECTIONS_COLLECTION_NAME))
+        ? await getOrCreateCollection(SECTIONS_SOURCE, preview.source, brandedCollectionName(base, SECTIONS_COLLECTION_NAME))
         : null
 
     await runSync(
@@ -557,16 +568,16 @@ export async function syncExistingCollection(
         const { categories, sections, items } = applyConfig(preview, config)
 
         const categoriesCollection = config.levels.categories
-            ? await findCollectionBySource(CATEGORIES_SOURCE, brandedCollectionName(preview.brand, CATEGORIES_COLLECTION_NAME))
+            ? await findCollectionBySource(CATEGORIES_SOURCE, preview.source, brandedCollectionName(preview.brand, CATEGORIES_COLLECTION_NAME))
             : null
         const sectionsCollection = config.levels.sections
-            ? await findCollectionBySource(SECTIONS_SOURCE, brandedCollectionName(preview.brand, SECTIONS_COLLECTION_NAME))
+            ? await findCollectionBySource(SECTIONS_SOURCE, preview.source, brandedCollectionName(preview.brand, SECTIONS_COLLECTION_NAME))
             : null
         // Resolve the Items collection (the active one if this button was its resync).
         const itemsCollection =
             previousDataSourceId === ITEMS_SOURCE
                 ? collection
-                : await findCollectionBySource(ITEMS_SOURCE, brandedCollectionName(preview.brand, ITEMS_COLLECTION_NAME))
+                : await findCollectionBySource(ITEMS_SOURCE, preview.source, brandedCollectionName(preview.brand, ITEMS_COLLECTION_NAME))
 
         if (!itemsCollection) {
             framer.notify("“Menu Items” collection not found — re-import from the plugin.", { variant: "error" })
