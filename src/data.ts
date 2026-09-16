@@ -7,15 +7,7 @@ import {
     type ProtectedMethod,
 } from "@framer/plugin"
 // Menu → CMS transform (Omega JSON; redro is scraped server-side by the worker).
-import {
-    slugify,
-    transform,
-    type MenuCategory,
-    type MenuItem,
-    type MenuSection,
-    type SourceId,
-    type TransformResult,
-} from "./lib/transform.js"
+import { transform, type MenuCategory, type MenuItem, type MenuSection, type TransformResult } from "./lib/transform.js"
 
 /**
  * Deployed menu proxy (worker/). The worker is REQUIRED because the browser can't do what it
@@ -36,7 +28,7 @@ export interface MenuSource {
     platform: Platform
     /** Canonical, round-trippable source string: an Omega customer id, or the full redro menu URL. */
     value: string
-    /** Default currency for the platform (each import is a single venue → one currency). */
+    /** Default currency for the platform (each menu is a single venue → one currency). */
     currency: string
 }
 
@@ -56,22 +48,39 @@ export const PROVIDERS: readonly ProviderInfo[] = [
     { platform: "redro", name: "redro.menu", host: "*.redro.menu" },
 ]
 
-// A 3-level hierarchy: Categories → Sections → Items. Linked BOTH ways:
-//   • up-references   (child → parent)  : Section.category, Item.section, Item.category
-//   • down-references (parent → children, multi): Category.sections, Section.items
+// A 4-level hierarchy: Locations → Categories → Sections → Items, one set of collections for
+// every menu in the import (each row carries its location). Linked BOTH ways:
+//   • up-references   (child → parent)        : Item/Section/Category.location, Item/Section.category, Item.section
+//   • down-references (parent → children, multi): Location → next level, Category → next level, Section.items
 // The down multi-references let a nested Collection List be sourced directly from
-// "Current Item's Sections/Items" — the reliable way to nest when Framer won't offer the
-// up-reference as a "Current Item" filter value.
-const CATEGORIES_SOURCE = "menu-categories"
-const SECTIONS_SOURCE = "menu-sections"
-const ITEMS_SOURCE = "menu-items"
-const CATEGORIES_COLLECTION_NAME = "Menu Categories"
-const SECTIONS_COLLECTION_NAME = "Menu Sections"
-const ITEMS_COLLECTION_NAME = "Menu Items"
+// "Current Item's Categories/Sections/Items" — the reliable way to nest when Framer won't offer
+// the up-reference as a "Current Item" filter value. That is also what makes ONE Locations page
+// template render every venue's menu.
+export type Level = "locations" | "categories" | "sections" | "items"
+const LEVELS: readonly Level[] = ["locations", "categories", "sections", "items"]
+const LEVEL_SOURCE: Record<Level, string> = {
+    locations: "menu-locations",
+    categories: "menu-categories",
+    sections: "menu-sections",
+    items: "menu-items",
+}
+export const LEVEL_COLLECTION_NAME: Record<Level, string> = {
+    locations: "Menu Locations",
+    categories: "Menu Categories",
+    sections: "Menu Sections",
+    items: "Menu Items",
+}
 
 export const PLUGIN_KEYS = {
     DATA_SOURCE_ID: "dataSourceId",
+    /** Legacy (single-menu) source. Read for backward compatibility; cleared on the next sync. */
     CUSTOMER_ID: "customerId",
+    /** JSON array of canonical menu sources (Omega customer ids / redro URLs). */
+    MENU_SOURCES: "menuSources",
+    /** Shared by the collections of one import, so separate imports never reuse each other's. */
+    GROUP_ID: "groupId",
+    /** JSON BranchesSource when the menu links are read from a user's branches collection. */
+    BRANCHES: "branchesSource",
     IMPORT_CONFIG: "importConfig",
 } as const
 
@@ -83,30 +92,47 @@ export interface ItemFlags {
 }
 
 export interface ImportConfig {
-    /** Which collections/levels to create. Items is always synced (the active collection). */
-    levels: { categories: boolean; sections: boolean }
-    /** Category ids to exclude (cascades to their sections + items). Numbers (Omega) or slugs (redro). */
-    excludedCategoryIds: SourceId[]
-    /** Section ids to exclude (cascades to their items). Numbers (Omega) or strings (redro). */
-    excludedSectionIds: SourceId[]
+    /** Which collections/levels to create. Items is always synced. */
+    levels: { locations: boolean; categories: boolean; sections: boolean }
+    /** Collection name prefix ("Amar" → "Amar-Menu Items"); null = derived from the venue names. */
+    collectionPrefix: string | null
+    /** Display-name overrides per location key (the menu data's venue name can be a legal name). */
+    locationNames: Record<string, string>
+    /** Location-scoped category ids to exclude (cascades to their sections + items). */
+    excludedCategoryIds: string[]
+    /** Location-scoped section ids to exclude (cascades to their items). */
+    excludedSectionIds: string[]
     itemFlags: ItemFlags
 }
 
 export const DEFAULT_CONFIG: ImportConfig = {
-    levels: { categories: true, sections: true },
+    levels: { locations: true, categories: true, sections: true },
+    collectionPrefix: null,
+    locationNames: {},
     excludedCategoryIds: [],
     excludedSectionIds: [],
     itemFlags: { onlyPopular: false, onlyNew: false, requirePrice: false },
 }
 
-export function parseImportConfig(raw: string | null): ImportConfig {
+/**
+ * Parse a stored config. `legacyLocationKey` is set for collections synced before multi-location
+ * support: their excluded ids are raw menu ids, so they get scoped to that single location.
+ */
+export function parseImportConfig(raw: string | null, legacyLocationKey: string | null = null): ImportConfig {
     if (!raw) return DEFAULT_CONFIG
     try {
-        const parsed = JSON.parse(raw) as Partial<ImportConfig>
+        const parsed = JSON.parse(raw) as Partial<ImportConfig> & {
+            excludedCategoryIds?: unknown[]
+            excludedSectionIds?: unknown[]
+        }
+        const scope = (ids: unknown[] | undefined) =>
+            (ids ?? []).map(id => (legacyLocationKey ? scopedId(legacyLocationKey, String(id)) : String(id)))
         return {
             levels: { ...DEFAULT_CONFIG.levels, ...parsed.levels },
-            excludedCategoryIds: parsed.excludedCategoryIds ?? [],
-            excludedSectionIds: parsed.excludedSectionIds ?? [],
+            collectionPrefix: typeof parsed.collectionPrefix === "string" ? parsed.collectionPrefix : null,
+            locationNames: parsed.locationNames ?? {},
+            excludedCategoryIds: scope(parsed.excludedCategoryIds),
+            excludedSectionIds: scope(parsed.excludedSectionIds),
             itemFlags: { ...DEFAULT_CONFIG.itemFlags, ...parsed.itemFlags },
         }
     } catch {
@@ -153,6 +179,49 @@ export function parseMenuSource(input: string): MenuSource {
     throw new Error(`Unrecognized menu URL “${input}”. Expected an Omega or redro menu link.`)
 }
 
+/** Split the setup screen's input (one link per line; commas/spaces also accepted) into sources. */
+export function splitMenuInput(input: string): string[] {
+    return input
+        .split(/[\s,]+/)
+        .map(part => part.trim())
+        .filter(Boolean)
+}
+
+/**
+ * Stable per-venue key, used to scope row ids and to dedupe links. Menu ids are only unique within
+ * a venue (Omega branches share section ids; redro locations share category/section slugs), so
+ * every row id is prefixed with this. Omega → customer id; redro → "{sub}-{location}".
+ */
+export function locationKey(source: MenuSource): string {
+    if (source.platform === "omega") return source.value
+    const url = new URL(source.value)
+    const sub = url.hostname.replace(/\.?redro\.menu$/i, "")
+    const location = (url.pathname.split("/").filter(Boolean).pop() ?? "").replace(/\.html?$/i, "")
+    return [sub, location]
+        .filter(Boolean)
+        .join("-")
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "-")
+}
+
+/** ":" never appears in a location key, so scoped ids can't collide across venues. */
+const scopedId = (key: string, id: string | number) => `${key}:${id}`
+
+function menuUrlFor(source: MenuSource): string {
+    return source.platform === "omega" ? `https://menu.omegasoftware.ca/${source.value}` : source.value
+}
+
+/** Slug from text only (transform's slugify appends an id; location slugs read better without). */
+function slugText(text: string): string {
+    return text
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[̀-ͯ]/g, "")
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 60)
+}
+
 // ─── Field value builders ───────────────────────────────────────────────────
 const str = (value: string): FieldDataInput[string] => ({ type: "string", value })
 const num = (value: number): FieldDataInput[string] => ({ type: "number", value })
@@ -160,157 +229,37 @@ const bool = (value: boolean): FieldDataInput[string] => ({ type: "boolean", val
 const ref = (value: string): FieldDataInput[string] => ({ type: "collectionReference", value })
 const multiRef = (value: string[]): FieldDataInput[string] => ({ type: "multiCollectionReference", value })
 const img = (value: string): FieldDataInput[string] => ({ type: "image", value })
-
-// ─── Schema (fields) ─────────────────────────────────────────────────────────
-function categoryFields(sectionsCollectionId: string | null): ManagedCollectionFieldInput[] {
-    const fields: ManagedCollectionFieldInput[] = [
-        { id: "title", name: "Title", type: "string" },
-        { id: "sortOrder", name: "Sort Order", type: "number" },
-    ]
-    // Down-reference: the sections in this category (source a nested list from here).
-    if (sectionsCollectionId) {
-        fields.push({ id: "sections", name: "Sections", type: "multiCollectionReference", collectionId: sectionsCollectionId })
-    }
-    return fields
-}
-
-function sectionFields(categoriesCollectionId: string | null, itemsCollectionId: string | null): ManagedCollectionFieldInput[] {
-    const fields: ManagedCollectionFieldInput[] = [
-        { id: "title", name: "Title", type: "string" },
-        { id: "comment", name: "Comment", type: "string" },
-        { id: "sortOrder", name: "Sort Order", type: "number" },
-    ]
-    if (categoriesCollectionId) {
-        fields.push({ id: "category", name: "Category", type: "collectionReference", collectionId: categoriesCollectionId })
-    }
-    // Down-reference: the items in this section.
-    if (itemsCollectionId) {
-        fields.push({ id: "items", name: "Items", type: "multiCollectionReference", collectionId: itemsCollectionId })
-    }
-    return fields
-}
-
-function itemFields(
-    categoriesCollectionId: string | null,
-    sectionsCollectionId: string | null
-): ManagedCollectionFieldInput[] {
-    const fields: ManagedCollectionFieldInput[] = [
-        { id: "title", name: "Title", type: "string" },
-        { id: "description", name: "Description", type: "string" },
-        { id: "price", name: "Price", type: "number" },
-        { id: "priceNote", name: "Price Note", type: "string" },
-        // Currency is one value per import (the venue's) — denormalized onto every item for rendering.
-        { id: "currency", name: "Currency", type: "string" },
-        // Calories is Plain Text, NOT Number: Framer's CMS rejects optional Number fields
-        // ("Optional numbers are not supported in the CMS") and calories are frequently missing.
-        { id: "calories", name: "Calories", type: "string" },
-        // Item photo (redro item detail pages; Omega venues carry none). Written only when present.
-        { id: "image", name: "Image", type: "image" },
-        { id: "popular", name: "Popular", type: "boolean" },
-        { id: "newItem", name: "New", type: "boolean" },
-        { id: "sortOrder", name: "Sort Order", type: "number" },
-    ]
-    if (sectionsCollectionId) {
-        fields.push({ id: "section", name: "Section", type: "collectionReference", collectionId: sectionsCollectionId })
-    }
-    if (categoriesCollectionId) {
-        fields.push({ id: "category", name: "Category", type: "collectionReference", collectionId: categoriesCollectionId })
-    }
-    return fields
-}
-
-// ─── Items (rows), keyed on Omega IDs ────────────────────────────────────────
-// `childIds` (when provided) fills the down multi-reference; omitted in pass 1 (children
-// don't exist yet) and provided in pass 2.
-function categoryItems(
-    categories: MenuCategory[],
-    sectionIdsByCategory: Map<SourceId, string[]> | null
-): ManagedCollectionItemInput[] {
-    return categories.map((category, index) => {
-        const fieldData: FieldDataInput = {
-            title: str(category.name),
-            sortOrder: num(index + 1),
-        }
-        if (sectionIdsByCategory) fieldData.sections = multiRef(sectionIdsByCategory.get(category.id) ?? [])
-        return { id: String(category.id), slug: slugify(category.name, category.id), draft: false, fieldData }
-    })
-}
-
-function sectionItems(
-    sections: MenuSection[],
-    hasCategoryRef: boolean,
-    itemIdsBySection: Map<SourceId, string[]> | null
-): ManagedCollectionItemInput[] {
-    return sections.map(section => {
-        const fieldData: FieldDataInput = {
-            title: str(section.title),
-            comment: str(section.comment),
-            sortOrder: num(section.sortOrder),
-        }
-        if (hasCategoryRef) fieldData.category = ref(String(section.categoryId))
-        if (itemIdsBySection) fieldData.items = multiRef(itemIdsBySection.get(section.omegaId) ?? [])
-        return { id: String(section.omegaId), slug: section.slug, draft: false, fieldData }
-    })
-}
-
-function itemItems(
-    items: MenuItem[],
-    hasCategoryRef: boolean,
-    hasSectionRef: boolean,
-    currency: string
-): ManagedCollectionItemInput[] {
-    return items.map(item => {
-        const fieldData: FieldDataInput = {
-            title: str(item.title),
-            description: str(item.description),
-            priceNote: str(item.priceNote),
-            currency: str(currency),
-            popular: bool(item.popular),
-            newItem: bool(item.newItem),
-            sortOrder: num(item.sortOrder),
-        }
-        if (typeof item.price === "number") fieldData.price = num(item.price)
-        // Calories → Plain Text; redro supplies a number, Omega has none. Omit when absent.
-        if (item.calories != null) fieldData.calories = str(String(item.calories))
-        // Image → written only when non-empty (never send an empty/null image value).
-        if (item.image) fieldData.image = img(item.image)
-        if (hasSectionRef) fieldData.section = ref(String(item.sectionOmegaId))
-        if (hasCategoryRef) fieldData.category = ref(String(item.categoryId))
-        return { id: String(item.omegaId), slug: item.slug, draft: false, fieldData }
-    })
-}
-
-/** Group child ids under their parent for the down multi-references (order preserved). */
-function groupChildIds(sections: MenuSection[], items: MenuItem[]) {
-    const sectionIdsByCategory = new Map<SourceId, string[]>()
-    for (const section of sections) {
-        const list = sectionIdsByCategory.get(section.categoryId) ?? []
-        list.push(String(section.omegaId))
-        sectionIdsByCategory.set(section.categoryId, list)
-    }
-    const itemIdsBySection = new Map<SourceId, string[]>()
-    for (const item of items) {
-        const list = itemIdsBySection.get(item.sectionOmegaId) ?? []
-        list.push(String(item.omegaId))
-        itemIdsBySection.set(item.sectionOmegaId, list)
-    }
-    return { sectionIdsByCategory, itemIdsBySection }
-}
+const link = (value: string): FieldDataInput[string] => ({ type: "link", value })
 
 // ─── Fetch + preview ─────────────────────────────────────────────────────────
-export interface MenuPreview {
+export interface LocationPreview {
+    /** Stable venue key (see locationKey). */
+    key: string
     /** Canonical source string persisted for resync (Omega customer id or full redro URL). */
     source: string
+    menuUrl: string
     platform: Platform
     /** Venue currency (USD Omega / SAR redro), denormalized onto every imported item. */
     currency: string
+    /** Venue name from the menu data. */
     brand: string
+    /** The branches-collection item this menu came from (collection input only). */
+    branch: Branch | null
     categories: MenuCategory[]
     sections: MenuSection[]
     items: MenuItem[]
 }
 
-/** Fetch the menu for a source through the worker. Both platforms yield the shared shape:
+export interface MenuPreview {
+    locations: LocationPreview[]
+    /** Set when the links were read from a branches collection (persisted for resync). */
+    branches: BranchesSource | null
+    branchesCollectionName: string | null
+    /** Branch items left out: drafts, or no menu link. */
+    skippedBranches: number
+}
+
+/** Fetch one menu through the worker. Both platforms yield the shared shape:
  *  Omega returns raw JSON we transform() here; redro is scraped + shaped by the worker. */
 async function fetchMenu(source: MenuSource, abortSignal?: AbortSignal): Promise<TransformResult> {
     if (source.platform === "redro") {
@@ -331,41 +280,565 @@ async function fetchMenu(source: MenuSource, abortSignal?: AbortSignal): Promise
     return transform(await response.json())
 }
 
-/** Parse the user input, fetch + shape the full menu so the UI can present categories/sections. */
-export async function loadMenuPreview(input: string, abortSignal?: AbortSignal): Promise<MenuPreview> {
-    const source = parseMenuSource(input)
-    const { brand, categories, sections, items } = await fetchMenu(source, abortSignal)
-    return { source: source.value, platform: source.platform, currency: source.currency, brand, categories, sections, items }
+// ─── Branches collection (menu links read from the user's own CMS collection) ─
+/** Where to read branches from: a user collection + the fields holding the menu link and name. */
+export interface BranchesSource {
+    collectionId: string
+    urlFieldId: string
+    /** Plain-text field with the branch name; null → the item's slug. */
+    nameFieldId: string | null
+}
+
+export interface Branch {
+    /** The branch's CMS item id (the Menu Location's "Branch" reference points at it). */
+    itemId: string
+    name: string
+}
+
+export interface FieldOption {
+    id: string
+    name: string
+}
+
+export interface BranchCollectionOption {
+    id: string
+    name: string
+    /** Fields that can hold a menu link (Link or Plain Text). */
+    linkFields: FieldOption[]
+    /** Fields that can hold the branch name (Plain Text). */
+    nameFields: FieldOption[]
+}
+
+/** The user's own (non-plugin) collections, with the fields usable for links and names. */
+export async function listBranchCollections(): Promise<BranchCollectionOption[]> {
+    const collections = (await framer.getCollections()).filter(collection => collection.managedBy === "user")
+    return Promise.all(
+        collections.map(async collection => {
+            const fields = await collection.getFields()
+            const option = (field: { id: string; name: string }) => ({ id: field.id, name: field.name })
+            return {
+                id: collection.id,
+                name: collection.name,
+                linkFields: fields.filter(field => field.type === "link" || field.type === "string").map(option),
+                nameFields: fields.filter(field => field.type === "string").map(option),
+            }
+        })
+    )
+}
+
+/** Pick the field whose name matches (e.g. /menu/ for the link), else the first field. */
+export function guessField(fields: FieldOption[], pattern: RegExp): FieldOption | null {
+    return fields.find(field => pattern.test(field.name)) ?? fields[0] ?? null
+}
+
+async function readBranches(branches: BranchesSource) {
+    const collection = await framer.getCollection(branches.collectionId)
+    if (!collection) throw new Error("The branches collection was not found — choose it again.")
+
+    const entries: { link: string; branch: Branch }[] = []
+    let skipped = 0
+    for (const item of await collection.getItems()) {
+        const linkEntry = item.fieldData[branches.urlFieldId]
+        const link = linkEntry?.type === "link" || linkEntry?.type === "string" ? (linkEntry.value ?? "").trim() : ""
+        if (item.draft || !link) {
+            skipped++
+            continue
+        }
+        const nameEntry = branches.nameFieldId ? item.fieldData[branches.nameFieldId] : undefined
+        const name = (nameEntry?.type === "string" ? nameEntry.value.trim() : "") || item.slug
+        entries.push({ link, branch: { itemId: item.id, name } })
+    }
+    return { collectionName: collection.name, entries, skipped }
+}
+
+/** What to load: pasted links, or the menu links in a branches collection. */
+export type MenuInput = { kind: "links"; links: string[] } | { kind: "collection"; branches: BranchesSource }
+
+/**
+ * Fetch every menu (in parallel). All-or-nothing: if any menu fails, this throws before anything
+ * is written, so a flaky source can never wipe that venue's rows during a sync.
+ */
+export async function loadMenuPreview(input: MenuInput, abortSignal?: AbortSignal): Promise<MenuPreview> {
+    let entries: { link: string; branch: Branch | null }[]
+    let branchesCollectionName: string | null = null
+    let skippedBranches = 0
+    if (input.kind === "links") {
+        entries = input.links.map(link => ({ link, branch: null }))
+        if (entries.length === 0) throw new Error("Paste at least one menu link.")
+    } else {
+        const read = await readBranches(input.branches)
+        entries = read.entries
+        branchesCollectionName = read.collectionName
+        skippedBranches = read.skipped
+        if (entries.length === 0) {
+            throw new Error(`No branches in “${read.collectionName}” have a menu link in the chosen field.`)
+        }
+    }
+
+    const errors: string[] = []
+    const unique = new Map<string, { source: MenuSource; branch: Branch | null }>()
+    for (const { link, branch } of entries) {
+        try {
+            const source = parseMenuSource(link)
+            const key = locationKey(source)
+            if (!unique.has(key)) unique.set(key, { source, branch })
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            errors.push(branch ? `${branch.name}: ${message}` : message)
+        }
+    }
+    if (errors.length > 0) throw new Error(errors.join("\n"))
+
+    const results = await Promise.allSettled(
+        Array.from(unique, async ([key, { source, branch }]): Promise<LocationPreview> => {
+            const { brand, categories, sections, items } = await fetchMenu(source, abortSignal)
+            return {
+                key,
+                source: source.value,
+                menuUrl: menuUrlFor(source),
+                platform: source.platform,
+                currency: source.currency,
+                brand,
+                branch,
+                categories,
+                sections,
+                items,
+            }
+        })
+    )
+
+    for (const result of results) {
+        if (result.status === "rejected") {
+            errors.push(result.reason instanceof Error ? result.reason.message : String(result.reason))
+        }
+    }
+    if (errors.length > 0) throw new Error(errors.join("\n"))
+
+    return {
+        locations: results.flatMap(result => (result.status === "fulfilled" ? [result.value] : [])),
+        branches: input.kind === "collection" ? input.branches : null,
+        branchesCollectionName,
+        skippedBranches,
+    }
+}
+
+// ─── Naming ──────────────────────────────────────────────────────────────────
+export function locationName(location: LocationPreview, config: ImportConfig): string {
+    // A branches collection is the source of truth for names (edit them in the CMS).
+    if (location.branch) return location.branch.name
+    return config.locationNames[location.key]?.trim() || location.brand || location.key
+}
+
+/** Default prefix: the venue name for one menu; the most common first word for a group ("Amar"). */
+export function defaultCollectionPrefix(preview: MenuPreview): string {
+    const brands = preview.locations.map(location => location.brand.trim()).filter(Boolean)
+    if (brands.length <= 1) return brands[0] ?? ""
+    const counts = new Map<string, number>()
+    for (const brand of brands) {
+        const first = brand.split(/\s+/)[0] ?? ""
+        counts.set(first, (counts.get(first) ?? 0) + 1)
+    }
+    const [word, count] = [...counts].sort((a, b) => b[1] - a[1])[0] ?? ["", 0]
+    return count >= 2 ? word : ""
+}
+
+export function collectionPrefix(preview: MenuPreview, config: ImportConfig): string {
+    return config.collectionPrefix ?? defaultCollectionPrefix(preview)
+}
+
+/** Prefix a collection name: "Amar" + "Menu Items" → "Amar-Menu Items". */
+export function brandedCollectionName(prefix: string, base: string): string {
+    const trimmed = prefix.trim()
+    return trimmed ? `${trimmed}-${base}` : base
+}
+
+// ─── Flattened, location-scoped rows ─────────────────────────────────────────
+interface LocationRow {
+    id: string
+    slug: string
+    name: string
+    platform: Platform
+    currency: string
+    menuUrl: string
+    branchItemId: string | null
+    sortOrder: number
+}
+interface CategoryRow {
+    id: string
+    slug: string
+    name: string
+    locationId: string
+    sortOrder: number
+}
+interface SectionRow {
+    id: string
+    slug: string
+    title: string
+    comment: string
+    locationId: string
+    categoryId: string
+    sortOrder: number
+}
+interface ItemRow {
+    id: string
+    slug: string
+    item: MenuItem
+    currency: string
+    locationId: string
+    categoryId: string
+    sectionId: string
+}
+interface MenuRows {
+    locations: LocationRow[]
+    categories: CategoryRow[]
+    sections: SectionRow[]
+    items: ItemRow[]
+}
+
+/** Every venue's menu as one set of rows with location-scoped ids + slugs (unfiltered). */
+function flatten(preview: MenuPreview, config: ImportConfig): MenuRows {
+    const rows: MenuRows = { locations: [], categories: [], sections: [], items: [] }
+    const usedSlugs = new Set<string>()
+
+    preview.locations.forEach((location, index) => {
+        const name = locationName(location, config)
+        let slug = slugText(name) || location.key
+        if (usedSlugs.has(slug)) slug = `${slug}-${location.key}`
+        usedSlugs.add(slug)
+
+        const locationId = location.key
+        const scoped = (id: string | number) => scopedId(location.key, id)
+        rows.locations.push({
+            id: locationId,
+            slug,
+            name,
+            platform: location.platform,
+            currency: location.currency,
+            menuUrl: location.menuUrl,
+            branchItemId: location.branch?.itemId ?? null,
+            sortOrder: index + 1,
+        })
+        location.categories.forEach((category, categoryIndex) => {
+            rows.categories.push({
+                id: scoped(category.id),
+                slug: `${slug}-${slugText(category.name) || "category"}-${category.id}`,
+                name: category.name,
+                locationId,
+                sortOrder: categoryIndex + 1,
+            })
+        })
+        for (const section of location.sections) {
+            rows.sections.push({
+                id: scoped(section.omegaId),
+                slug: `${slug}-${section.slug}`,
+                title: section.title,
+                comment: section.comment,
+                locationId,
+                categoryId: scoped(section.categoryId),
+                sortOrder: section.sortOrder,
+            })
+        }
+        for (const item of location.items) {
+            rows.items.push({
+                id: scoped(item.omegaId),
+                slug: `${slug}-${item.slug}`,
+                item,
+                currency: location.currency,
+                locationId,
+                categoryId: scoped(item.categoryId),
+                sectionId: scoped(item.sectionOmegaId),
+            })
+        }
+    })
+    return rows
 }
 
 /** Apply the import config: level toggles, category/section exclusions, item flag filters. */
-function applyConfig(preview: MenuPreview, config: ImportConfig) {
+function applyConfig(preview: MenuPreview, config: ImportConfig): MenuRows {
+    const all = flatten(preview, config)
     const excludedCats = new Set(config.excludedCategoryIds)
     const excludedSecs = new Set(config.excludedSectionIds)
 
-    const keptSections = preview.sections.filter(
-        section => !excludedCats.has(section.categoryId) && !excludedSecs.has(section.omegaId)
+    const sections = all.sections.filter(
+        section => !excludedCats.has(section.categoryId) && !excludedSecs.has(section.id)
     )
-    const keptSectionIds = new Set(keptSections.map(section => section.omegaId))
+    let items = all.items.filter(row => !excludedCats.has(row.categoryId) && !excludedSecs.has(row.sectionId))
+    if (config.itemFlags.onlyPopular) items = items.filter(row => row.item.popular)
+    if (config.itemFlags.onlyNew) items = items.filter(row => row.item.newItem)
+    if (config.itemFlags.requirePrice) items = items.filter(row => row.item.price !== null)
 
-    let items = preview.items.filter(item => !excludedCats.has(item.categoryId))
-    if (config.levels.sections) items = items.filter(item => keptSectionIds.has(item.sectionOmegaId))
-    if (config.itemFlags.onlyPopular) items = items.filter(item => item.popular)
-    if (config.itemFlags.onlyNew) items = items.filter(item => item.newItem)
-    if (config.itemFlags.requirePrice) items = items.filter(item => item.price !== null)
-
-    const categories = config.levels.categories
-        ? preview.categories.filter(category => !excludedCats.has(category.id))
-        : []
-    const sections = config.levels.sections ? keptSections : []
-
-    return { categories, sections, items }
+    return {
+        locations: config.levels.locations ? all.locations : [],
+        categories: config.levels.categories ? all.categories.filter(category => !excludedCats.has(category.id)) : [],
+        sections: config.levels.sections ? sections : [],
+        items,
+    }
 }
 
 /** Live counts of what the current config would import (for the config screen summary). */
 export function previewCounts(preview: MenuPreview, config: ImportConfig) {
-    const { categories, sections, items } = applyConfig(preview, config)
-    return { categories: categories.length, sections: sections.length, items: items.length }
+    const { locations, categories, sections, items } = applyConfig(preview, config)
+    return {
+        locations: locations.length,
+        categories: categories.length,
+        sections: sections.length,
+        items: items.length,
+    }
+}
+
+/** The (location-scoped) ids the config screen toggles, per location. */
+export function scopedCategoryId(location: LocationPreview, category: MenuCategory): string {
+    return scopedId(location.key, category.id)
+}
+export function scopedSectionId(location: LocationPreview, section: MenuSection): string {
+    return scopedId(location.key, section.omegaId)
+}
+
+// ─── Schema (fields) ─────────────────────────────────────────────────────────
+type CollectionIds = Record<Exclude<Level, "items">, string | null> & {
+    items: string
+    /** The user's branches collection, when Menu Locations link back to it (null = no Branch field). */
+    branches: string | null
+}
+
+/** The level directly below `level` that is being synced (down multi-references point at it). */
+function childLevel(level: Level, ids: CollectionIds): Level | null {
+    const below = LEVELS.slice(LEVELS.indexOf(level) + 1)
+    return below.find(candidate => ids[candidate] !== null) ?? null
+}
+
+function downField(level: Level, ids: CollectionIds): ManagedCollectionFieldInput[] {
+    const child = childLevel(level, ids)
+    const collectionId = child ? ids[child] : null
+    if (!child || !collectionId) return []
+    const name = LEVEL_COLLECTION_NAME[child].replace("Menu ", "")
+    return [{ id: child, name, type: "multiCollectionReference", collectionId }]
+}
+
+function upFields(level: Level, ids: CollectionIds): ManagedCollectionFieldInput[] {
+    const parents: [Level, string, string][] = [
+        ["locations", "location", "Location"],
+        ["categories", "category", "Category"],
+        ["sections", "section", "Section"],
+    ]
+    const fields: ManagedCollectionFieldInput[] = []
+    for (const [parent, id, name] of parents.slice(0, LEVELS.indexOf(level))) {
+        const collectionId = ids[parent]
+        if (collectionId) fields.push({ id, name, type: "collectionReference", collectionId })
+    }
+    return fields
+}
+
+function fieldsFor(level: Level, ids: CollectionIds): ManagedCollectionFieldInput[] {
+    const own: Record<Level, ManagedCollectionFieldInput[]> = {
+        locations: [
+            { id: "title", name: "Title", type: "string" },
+            { id: "sortOrder", name: "Sort Order", type: "number" },
+            { id: "platform", name: "Platform", type: "string" },
+            { id: "currency", name: "Currency", type: "string" },
+            { id: "menuUrl", name: "Menu URL", type: "link" },
+        ],
+        categories: [
+            { id: "title", name: "Title", type: "string" },
+            { id: "sortOrder", name: "Sort Order", type: "number" },
+        ],
+        sections: [
+            { id: "title", name: "Title", type: "string" },
+            { id: "comment", name: "Comment", type: "string" },
+            { id: "sortOrder", name: "Sort Order", type: "number" },
+        ],
+        items: [
+            { id: "title", name: "Title", type: "string" },
+            { id: "description", name: "Description", type: "string" },
+            { id: "price", name: "Price", type: "number" },
+            { id: "priceNote", name: "Price Note", type: "string" },
+            // Currency is per venue (USD Omega / SAR redro) — denormalized onto every item for rendering.
+            { id: "currency", name: "Currency", type: "string" },
+            // Calories is Plain Text, NOT Number: Framer's CMS rejects optional Number fields
+            // ("Optional numbers are not supported in the CMS") and calories are frequently missing.
+            { id: "calories", name: "Calories", type: "string" },
+            // Item photo (redro item detail pages; Omega venues carry none). Written only when present.
+            { id: "image", name: "Image", type: "image" },
+            { id: "popular", name: "Popular", type: "boolean" },
+            { id: "newItem", name: "New", type: "boolean" },
+            { id: "sortOrder", name: "Sort Order", type: "number" },
+        ],
+    }
+    const branch: ManagedCollectionFieldInput[] =
+        level === "locations" && ids.branches
+            ? [{ id: "branch", name: "Branch", type: "collectionReference", collectionId: ids.branches }]
+            : []
+    return [...own[level], ...branch, ...upFields(level, ids), ...downField(level, ids)]
+}
+
+// ─── Rows → CMS items ────────────────────────────────────────────────────────
+/** Parent id → child ids (order preserved) for the down multi-references. */
+function groupChildren(rows: MenuRows, parent: Level, child: Level): Map<string, string[]> {
+    type ChildRow = { id: string; locationId?: string; categoryId?: string; sectionId?: string }
+    const parentIdOf = (row: ChildRow) =>
+        parent === "locations" ? row.locationId : parent === "categories" ? row.categoryId : row.sectionId
+    const children: ChildRow[] = rows[child]
+    const map = new Map<string, string[]>()
+    for (const row of children) {
+        const parentId = parentIdOf(row)
+        if (parentId === undefined) continue
+        const list = map.get(parentId) ?? []
+        list.push(row.id)
+        map.set(parentId, list)
+    }
+    return map
+}
+
+/**
+ * CMS items for one level. Up-references are always written; the down multi-reference only when
+ * `withChildren` (pass 2 — every child exists by then).
+ */
+function cmsItems(
+    level: Level,
+    rows: MenuRows,
+    ids: CollectionIds,
+    withChildren: boolean
+): ManagedCollectionItemInput[] {
+    const child = withChildren ? childLevel(level, ids) : null
+    const children = child ? groupChildren(rows, level, child) : null
+    const has = (parent: Level) => ids[parent] !== null
+
+    const finish = (id: string, slug: string, fieldData: FieldDataInput, up: Partial<Record<Level, string>>) => {
+        if (up.locations && has("locations")) fieldData.location = ref(up.locations)
+        if (up.categories && has("categories")) fieldData.category = ref(up.categories)
+        if (up.sections && has("sections")) fieldData.section = ref(up.sections)
+        if (child && children) fieldData[child] = multiRef(children.get(id) ?? [])
+        return { id, slug, draft: false, fieldData }
+    }
+
+    switch (level) {
+        case "locations":
+            return rows.locations.map(row =>
+                finish(
+                    row.id,
+                    row.slug,
+                    {
+                        title: str(row.name),
+                        sortOrder: num(row.sortOrder),
+                        platform: str(row.platform),
+                        currency: str(row.currency),
+                        menuUrl: link(row.menuUrl),
+                        ...(ids.branches && row.branchItemId ? { branch: ref(row.branchItemId) } : {}),
+                    },
+                    {}
+                )
+            )
+        case "categories":
+            return rows.categories.map(row =>
+                finish(
+                    row.id,
+                    row.slug,
+                    { title: str(row.name), sortOrder: num(row.sortOrder) },
+                    { locations: row.locationId }
+                )
+            )
+        case "sections":
+            return rows.sections.map(row =>
+                finish(
+                    row.id,
+                    row.slug,
+                    { title: str(row.title), comment: str(row.comment), sortOrder: num(row.sortOrder) },
+                    { locations: row.locationId, categories: row.categoryId }
+                )
+            )
+        case "items":
+            return rows.items.map(row => {
+                const { item } = row
+                const fieldData: FieldDataInput = {
+                    title: str(item.title),
+                    description: str(item.description),
+                    priceNote: str(item.priceNote),
+                    currency: str(row.currency),
+                    popular: bool(item.popular),
+                    newItem: bool(item.newItem),
+                    sortOrder: num(item.sortOrder),
+                }
+                if (typeof item.price === "number") fieldData.price = num(item.price)
+                // Calories → Plain Text; redro supplies a number, Omega has none. Omit when absent.
+                if (item.calories != null) fieldData.calories = str(String(item.calories))
+                // Image → written only when non-empty (never send an empty/null image value).
+                if (item.image) fieldData.image = img(item.image)
+                return finish(row.id, row.slug, fieldData, {
+                    locations: row.locationId,
+                    categories: row.categoryId,
+                    sections: row.sectionId,
+                })
+            })
+    }
+}
+
+// ─── Stored sync state ───────────────────────────────────────────────────────
+export interface StoredSync {
+    dataSourceId: string | null
+    /** Which level the collection holds (a collection with no plugin data becomes Items). */
+    level: Level
+    groupId: string | null
+    sources: string[]
+    /** Set when the menu links are read from a branches collection (resync re-reads it). */
+    branches: BranchesSource | null
+    config: ImportConfig
+}
+
+function levelOf(dataSourceId: string | null): Level {
+    return LEVELS.find(level => LEVEL_SOURCE[level] === dataSourceId) ?? "items"
+}
+
+export async function readStoredSync(collection: ManagedCollection): Promise<StoredSync> {
+    const [dataSourceId, legacySource, rawSources, groupId, rawBranches, rawConfig] = await Promise.all([
+        collection.getPluginData(PLUGIN_KEYS.DATA_SOURCE_ID),
+        collection.getPluginData(PLUGIN_KEYS.CUSTOMER_ID),
+        collection.getPluginData(PLUGIN_KEYS.MENU_SOURCES),
+        collection.getPluginData(PLUGIN_KEYS.GROUP_ID),
+        collection.getPluginData(PLUGIN_KEYS.BRANCHES),
+        collection.getPluginData(PLUGIN_KEYS.IMPORT_CONFIG),
+    ])
+
+    let branches: BranchesSource | null = null
+    try {
+        const parsed = rawBranches ? (JSON.parse(rawBranches) as Partial<BranchesSource>) : null
+        if (parsed?.collectionId && parsed.urlFieldId) {
+            branches = {
+                collectionId: parsed.collectionId,
+                urlFieldId: parsed.urlFieldId,
+                nameFieldId: parsed.nameFieldId ?? null,
+            }
+        }
+    } catch {
+        // ignore — falls back to the stored links
+    }
+
+    let sources: string[] = []
+    try {
+        const parsed: unknown = rawSources ? JSON.parse(rawSources) : null
+        if (Array.isArray(parsed)) sources = parsed.filter((value): value is string => typeof value === "string")
+    } catch {
+        // fall through to the legacy single source
+    }
+
+    // Pre multi-location collections: one menu under "customerId", raw (unscoped) excluded ids.
+    let legacyLocationKey: string | null = null
+    if (!rawSources && legacySource) {
+        sources = [legacySource]
+        try {
+            legacyLocationKey = locationKey(parseMenuSource(legacySource))
+        } catch {
+            // unparseable legacy source — keep the config's ids as they are
+        }
+    }
+
+    return {
+        dataSourceId,
+        level: levelOf(dataSourceId),
+        groupId: groupId ?? legacySource,
+        sources,
+        branches,
+        config: parseImportConfig(rawConfig, legacyLocationKey),
+    }
 }
 
 // ─── Collection helpers ──────────────────────────────────────────────────────
@@ -376,45 +849,28 @@ async function replaceItems(collection: ManagedCollection, items: ManagedCollect
     await collection.addItems(items)
 }
 
-async function setSyncMeta(collection: ManagedCollection, dataSourceId: string, menuSource: string, config: ImportConfig) {
-    await collection.setPluginData(PLUGIN_KEYS.DATA_SOURCE_ID, dataSourceId)
-    // Stored under the (legacy) "customerId" key for backward compatibility — the value is now the
-    // canonical source (Omega customer id or full redro URL), which parseMenuSource round-trips.
-    await collection.setPluginData(PLUGIN_KEYS.CUSTOMER_ID, menuSource)
-    await collection.setPluginData(PLUGIN_KEYS.IMPORT_CONFIG, JSON.stringify(config))
-}
-
 /**
- * Find the managed collection this plugin uses for a data source (Categories/Sections/Items) OF A
- * GIVEN MENU. Matching on the data source id alone isn't enough: every imported venue shares the
- * same ids ("menu-categories"…), so a second venue's import would reuse — and overwrite — the first
- * venue's Categories/Sections. Match on (data source, menu source), then fall back to the branded
- * name, but only for a collection not already bound to a different menu.
+ * Find this import's collection for a level. Matching on the data source id alone isn't enough:
+ * every import shares the same ids ("menu-categories"…), so a second import would reuse — and
+ * overwrite — the first one's collections. Match on (data source, group), then fall back to the
+ * name, but only for a collection not already bound to another import.
  */
-async function findCollectionBySource(source: string, menuSource: string, name: string): Promise<ManagedCollection | null> {
+async function findGroupCollection(level: Level, groupId: string, name: string): Promise<ManagedCollection | null> {
     const collections = await framer.getManagedCollections()
-    const boundMenus = new Map<ManagedCollection, string | null>()
+    const bound = new Set<ManagedCollection>()
     for (const collection of collections) {
         try {
             const dataSourceId = await collection.getPluginData(PLUGIN_KEYS.DATA_SOURCE_ID)
-            const boundMenu = await collection.getPluginData(PLUGIN_KEYS.CUSTOMER_ID)
-            boundMenus.set(collection, boundMenu)
-            if (dataSourceId === source && boundMenu === menuSource) return collection
+            const groupKey =
+                (await collection.getPluginData(PLUGIN_KEYS.GROUP_ID)) ??
+                (await collection.getPluginData(PLUGIN_KEYS.CUSTOMER_ID))
+            if (groupKey) bound.add(collection)
+            if (dataSourceId === LEVEL_SOURCE[level] && groupKey === groupId) return collection
         } catch {
             // ignore collections we can't read
         }
     }
-    for (const collection of collections) {
-        const boundMenu = boundMenus.get(collection)
-        if (collection.name === name && (!boundMenu || boundMenu === menuSource)) return collection
-    }
-    return null
-}
-
-/** Prefix a collection name with the venue brand: "Tavolina" + "Menu Items" → "Tavolina-Menu Items". */
-export function brandedCollectionName(brand: string, base: string): string {
-    const prefix = brand.trim()
-    return prefix ? `${prefix}-${base}` : base
+    return collections.find(collection => collection.name === name && !bound.has(collection)) ?? null
 }
 
 /**
@@ -436,56 +892,98 @@ async function createCollectionWithUniqueName(baseName: string): Promise<Managed
     throw new Error(`Could not create a uniquely named collection for “${baseName}”.`)
 }
 
-async function getOrCreateCollection(source: string, menuSource: string, name: string): Promise<ManagedCollection> {
-    return (await findCollectionBySource(source, menuSource, name)) ?? (await createCollectionWithUniqueName(name))
+type Collections = Record<Level, ManagedCollection | null>
+
+/** Resolve every enabled level's collection: the active one for its own level, else find (or create). */
+async function resolveCollections(
+    active: ManagedCollection,
+    activeLevel: Level,
+    groupId: string,
+    prefix: string,
+    config: ImportConfig,
+    create: boolean
+): Promise<Collections> {
+    const resolved: Collections = { locations: null, categories: null, sections: null, items: null }
+    for (const level of LEVELS) {
+        const enabled = level === "items" || config.levels[level]
+        if (level === activeLevel && !enabled) {
+            throw new Error(`This collection holds ${LEVEL_COLLECTION_NAME[level]} — keep that level enabled.`)
+        }
+        if (!enabled) continue
+        if (level === activeLevel) {
+            resolved[level] = active
+            continue
+        }
+        const name = brandedCollectionName(prefix, LEVEL_COLLECTION_NAME[level])
+        resolved[level] =
+            (await findGroupCollection(level, groupId, name)) ??
+            (create ? await createCollectionWithUniqueName(name) : null)
+    }
+    return resolved
 }
 
 /**
- * Sync the whole hierarchy across the (already-resolved) collections in two passes:
- *   pass 1 — create every item with its scalar fields + up-references (parents first)
- *   pass 2 — fill the parent→children down multi-references (children now all exist)
- * The two passes are required because Category↔Sections and Section↔Items reference each
- * other, so a single pass can't have every referenced item already present.
+ * Sync the whole hierarchy across the resolved collections in two passes:
+ *   pass 1 — every row with its scalar fields + up-references (parents first), stale rows removed
+ *   pass 2 — the parent→children down multi-references (children now all exist)
+ * Two passes are required because parents and children reference each other.
  */
 async function runSync(
-    itemsCollection: ManagedCollection,
-    categoriesCollection: ManagedCollection | null,
-    sectionsCollection: ManagedCollection | null,
-    menuSource: string,
-    currency: string,
-    config: ImportConfig,
-    categories: MenuCategory[],
-    sections: MenuSection[],
-    items: MenuItem[]
+    collections: Collections,
+    preview: MenuPreview,
+    rows: MenuRows,
+    groupId: string,
+    config: ImportConfig
 ) {
-    const { sectionIdsByCategory, itemIdsBySection } = groupChildIds(sections, items)
-    const hasCat = Boolean(categoriesCollection)
-    const hasSec = Boolean(sectionsCollection)
-
-    // Fields (reference fields need their target collection ids).
-    if (categoriesCollection) await categoriesCollection.setFields(categoryFields(sectionsCollection?.id ?? null))
-    if (sectionsCollection) {
-        await sectionsCollection.setFields(sectionFields(categoriesCollection?.id ?? null, itemsCollection.id))
+    const items = collections.items
+    if (!items) throw new Error("“Menu Items” collection not found — re-import from the plugin.")
+    const ids: CollectionIds = {
+        locations: collections.locations?.id ?? null,
+        categories: collections.categories?.id ?? null,
+        sections: collections.sections?.id ?? null,
+        items: items.id,
+        branches: preview.branches?.collectionId ?? null,
     }
-    await itemsCollection.setFields(itemFields(categoriesCollection?.id ?? null, sectionsCollection?.id ?? null))
+    const synced = LEVELS.flatMap(level => {
+        const collection = collections[level]
+        return collection ? [{ level, collection }] : []
+    })
 
-    // Pass 1 — items + up-references, parents before children, with stale cleanup.
-    if (categoriesCollection) await replaceItems(categoriesCollection, categoryItems(categories, null))
-    if (sectionsCollection) await replaceItems(sectionsCollection, sectionItems(sections, hasCat, null))
-    await replaceItems(itemsCollection, itemItems(items, hasCat, hasSec, currency))
-
-    // Pass 2 — parent→children down multi-references (upsert; every child now exists).
-    if (categoriesCollection) {
-        await categoriesCollection.addItems(categoryItems(categories, hasSec ? sectionIdsByCategory : null))
+    // Pass 1, level by level (parents first): fields, then rows + up-references, stale rows removed.
+    for (const { level, collection } of synced) {
+        try {
+            await collection.setFields(fieldsFor(level, ids))
+            await replaceItems(collection, cmsItems(level, rows, ids, false))
+        } catch (error) {
+            // A reference into the user's own branches collection is the one link we can't verify up
+            // front. If Framer rejects it, import without the Branch field rather than failing.
+            if (level !== "locations" || !ids.branches) throw error
+            console.warn("Branch reference rejected; importing Menu Locations without it.", error)
+            framer.notify(
+                "Couldn’t link Menu Locations to your branches collection — imported without the Branch field.",
+                {
+                    variant: "warning",
+                }
+            )
+            ids.branches = null
+            await collection.setFields(fieldsFor(level, ids))
+            await replaceItems(collection, cmsItems(level, rows, ids, false))
+        }
     }
-    if (sectionsCollection) {
-        await sectionsCollection.addItems(sectionItems(sections, hasCat, itemIdsBySection))
+    // Pass 2 — parent→children down multi-references (every child now exists).
+    for (const { level, collection } of synced) {
+        if (childLevel(level, ids)) await collection.addItems(cmsItems(level, rows, ids, true))
     }
 
-    // Metadata (data source + menu source + config) for resync.
-    if (categoriesCollection) await setSyncMeta(categoriesCollection, CATEGORIES_SOURCE, menuSource, config)
-    if (sectionsCollection) await setSyncMeta(sectionsCollection, SECTIONS_SOURCE, menuSource, config)
-    await setSyncMeta(itemsCollection, ITEMS_SOURCE, menuSource, config)
+    const sources = preview.locations.map(location => location.source)
+    for (const { level, collection } of synced) {
+        await collection.setPluginData(PLUGIN_KEYS.DATA_SOURCE_ID, LEVEL_SOURCE[level])
+        await collection.setPluginData(PLUGIN_KEYS.GROUP_ID, groupId)
+        await collection.setPluginData(PLUGIN_KEYS.MENU_SOURCES, JSON.stringify(sources))
+        await collection.setPluginData(PLUGIN_KEYS.BRANCHES, preview.branches ? JSON.stringify(preview.branches) : null)
+        await collection.setPluginData(PLUGIN_KEYS.IMPORT_CONFIG, JSON.stringify(config))
+        await collection.setPluginData(PLUGIN_KEYS.CUSTOMER_ID, null)
+    }
 }
 
 // ─── Permissions ─────────────────────────────────────────────────────────────
@@ -501,11 +999,15 @@ export const importMethods = [...syncMethods, "createManagedCollection"] as cons
 // ─── Public entry points ─────────────────────────────────────────────────────
 
 /**
- * One-shot import (CMS flow). The active collection — already created + named by Framer — becomes
- * Menu Items; Menu Categories / Menu Sections collections are created (brand-prefixed) for the
- * enabled levels. All linked both ways (up + down refs).
+ * Import (CMS flow) from an already-loaded preview. The active collection keeps its level (a fresh
+ * one becomes Menu Items); the other enabled levels are found by group or created, prefixed.
  */
-export async function importMenu(itemsCollection: ManagedCollection, menuSource: string, config: ImportConfig) {
+export async function importMenu(
+    active: ManagedCollection,
+    stored: StoredSync,
+    preview: MenuPreview,
+    config: ImportConfig
+) {
     // Gate every protected managed-collection operation up front (create + setFields + add/remove +
     // setPluginData). Without this the import would fail partway with a generic error.
     if (!framer.isAllowedTo(...importMethods)) {
@@ -515,28 +1017,10 @@ export async function importMenu(itemsCollection: ManagedCollection, menuSource:
         return
     }
 
-    const preview = await loadMenuPreview(menuSource)
-    const base = preview.brand
-    const { categories, sections, items } = applyConfig(preview, config)
-
-    const categoriesCollection = config.levels.categories
-        ? await getOrCreateCollection(CATEGORIES_SOURCE, preview.source, brandedCollectionName(base, CATEGORIES_COLLECTION_NAME))
-        : null
-    const sectionsCollection = config.levels.sections
-        ? await getOrCreateCollection(SECTIONS_SOURCE, preview.source, brandedCollectionName(base, SECTIONS_COLLECTION_NAME))
-        : null
-
-    await runSync(
-        itemsCollection,
-        categoriesCollection,
-        sectionsCollection,
-        preview.source,
-        preview.currency,
-        config,
-        categories,
-        sections,
-        items
-    )
+    const groupId = stored.groupId ?? crypto.randomUUID()
+    const prefix = collectionPrefix(preview, config)
+    const collections = await resolveCollections(active, stored.level, groupId, prefix, config, true)
+    await runSync(collections, preview, applyConfig(preview, config), groupId, config)
 }
 
 /**
@@ -544,16 +1028,13 @@ export async function importMenu(itemsCollection: ManagedCollection, menuSource:
  * consistent no matter which collection's button was clicked. Does not create collections.
  */
 export async function syncExistingCollection(
-    collection: ManagedCollection,
-    previousDataSourceId: string | null,
-    previousMenuSource: string | null,
-    previousImportConfig: string | null
+    active: ManagedCollection,
+    stored: StoredSync
 ): Promise<{ didSync: boolean }> {
-    if (!previousDataSourceId || !previousMenuSource) return { didSync: false }
+    if (!stored.dataSourceId || !stored.groupId) return { didSync: false }
+    if (!stored.branches && stored.sources.length === 0) return { didSync: false }
     if (framer.mode !== "syncManagedCollection") return { didSync: false }
-
-    const knownSources: string[] = [CATEGORIES_SOURCE, SECTIONS_SOURCE, ITEMS_SOURCE]
-    if (!knownSources.includes(previousDataSourceId)) return { didSync: false }
+    if (!LEVELS.some(level => LEVEL_SOURCE[level] === stored.dataSourceId)) return { didSync: false }
 
     // Gate the protected operations runSync performs; surface a clear message rather than failing
     // opaquely mid-sync when the plugin lacks collection permissions.
@@ -563,44 +1044,19 @@ export async function syncExistingCollection(
     }
 
     try {
-        const config = parseImportConfig(previousImportConfig)
-        const preview = await loadMenuPreview(previousMenuSource)
-        const { categories, sections, items } = applyConfig(preview, config)
-
-        const categoriesCollection = config.levels.categories
-            ? await findCollectionBySource(CATEGORIES_SOURCE, preview.source, brandedCollectionName(preview.brand, CATEGORIES_COLLECTION_NAME))
-            : null
-        const sectionsCollection = config.levels.sections
-            ? await findCollectionBySource(SECTIONS_SOURCE, preview.source, brandedCollectionName(preview.brand, SECTIONS_COLLECTION_NAME))
-            : null
-        // Resolve the Items collection (the active one if this button was its resync).
-        const itemsCollection =
-            previousDataSourceId === ITEMS_SOURCE
-                ? collection
-                : await findCollectionBySource(ITEMS_SOURCE, preview.source, brandedCollectionName(preview.brand, ITEMS_COLLECTION_NAME))
-
-        if (!itemsCollection) {
-            framer.notify("“Menu Items” collection not found — re-import from the plugin.", { variant: "error" })
-            return { didSync: false }
-        }
-
-        await runSync(
-            itemsCollection,
-            categoriesCollection,
-            sectionsCollection,
-            preview.source,
-            preview.currency,
-            config,
-            categories,
-            sections,
-            items
-        )
+        const { config, groupId } = stored
+        // A branches collection is re-read, so branches added in the CMS are picked up on resync.
+        const input: MenuInput = stored.branches
+            ? { kind: "collection", branches: stored.branches }
+            : { kind: "links", links: stored.sources }
+        const preview = await loadMenuPreview(input)
+        const prefix = collectionPrefix(preview, config)
+        const collections = await resolveCollections(active, stored.level, groupId, prefix, config, false)
+        await runSync(collections, preview, applyConfig(preview, config), groupId, config)
         return { didSync: true }
     } catch (error) {
         console.error(error)
-        framer.notify(`Failed to sync menu for “${previousMenuSource}”. Check the console for details.`, {
-            variant: "error",
-        })
+        framer.notify("Failed to sync the menus. Check the console for details.", { variant: "error" })
         return { didSync: false }
     }
 }

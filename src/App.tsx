@@ -3,25 +3,24 @@ import "./App.css"
 import { framer, type ManagedCollection } from "@framer/plugin"
 import { useLayoutEffect, useState } from "react"
 import { ConfigureImport } from "./ConfigureImport"
-import { DEFAULT_CONFIG, type ImportConfig, type MenuPreview } from "./data"
+import type { MenuPreview, StoredSync } from "./data"
 import { SelectMenu } from "./SelectMenu"
 
 interface AppProps {
     collection: ManagedCollection
-    /** Pre-fill when reconfiguring an already-synced collection (edit the menu link/filters). */
-    initialSource?: string | null
-    initialConfig?: ImportConfig
+    /** The collection's saved sync state — pre-fills the links/filters when reconfiguring. */
+    stored: StoredSync
 }
 
-export function App({ collection, initialSource, initialConfig = DEFAULT_CONFIG }: AppProps) {
+export function App({ collection, stored }: AppProps) {
     const [preview, setPreview] = useState<MenuPreview | null>(null)
 
     useLayoutEffect(() => {
         const configuring = Boolean(preview)
         framer.showUI({
-            width: configuring ? 320 : 280,
-            // The setup screen also lists the supported providers, so it needs more height.
-            height: configuring ? 500 : 390,
+            width: configuring ? 340 : 300,
+            // The setup screen lists the supported providers and a multi-line links box.
+            height: configuring ? 560 : 500,
             minWidth: configuring ? 320 : undefined,
             minHeight: configuring ? 400 : undefined,
             resizable: configuring,
@@ -29,14 +28,21 @@ export function App({ collection, initialSource, initialConfig = DEFAULT_CONFIG 
     }, [preview])
 
     if (!preview) {
-        return <SelectMenu onLoaded={setPreview} initialValue={initialSource ?? ""} />
+        return (
+            <SelectMenu
+                onLoaded={setPreview}
+                initialValue={stored.branches ? "" : stored.sources.join("\n")}
+                initialBranches={stored.branches}
+            />
+        )
     }
 
     return (
         <ConfigureImport
             collection={collection}
+            stored={stored}
             preview={preview}
-            initialConfig={initialConfig}
+            initialConfig={stored.config}
             onBack={() => setPreview(null)}
         />
     )
