@@ -1,6 +1,6 @@
 import { framer } from "@framer/plugin"
 import { useEffect, useRef, useState } from "react"
-import { loadMenuPreview, type MenuPreview, PROVIDERS } from "./data"
+import { loadMenuPreview, type MenuPreview, PROVIDERS, splitMenuInput } from "./data"
 
 interface SelectMenuProps {
     onLoaded: (preview: MenuPreview) => void
@@ -22,6 +22,8 @@ export function SelectMenu({ onLoaded, initialValue = "" }: SelectMenuProps) {
         }
     }, [])
 
+    const linkCount = splitMenuInput(customerInput).length
+
     const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault()
 
@@ -31,7 +33,7 @@ export function SelectMenu({ onLoaded, initialValue = "" }: SelectMenuProps) {
 
         try {
             setIsLoading(true)
-            const preview = await loadMenuPreview(customerInput, controller.signal)
+            const preview = await loadMenuPreview(splitMenuInput(customerInput), controller.signal)
             if (!mountedRef.current || controller.signal.aborted) return
             onLoaded(preview)
         } catch (error) {
@@ -56,7 +58,7 @@ export function SelectMenu({ onLoaded, initialValue = "" }: SelectMenuProps) {
                 </div>
                 <div className="content">
                     <h2>Restaurant Menu Import</h2>
-                    <p>Paste your restaurant’s menu link to load it, then choose what to import.</p>
+                    <p>Paste one menu link per line — each becomes a location — then choose what to import.</p>
                 </div>
             </div>
 
@@ -71,11 +73,11 @@ export function SelectMenu({ onLoaded, initialValue = "" }: SelectMenuProps) {
             </div>
 
             <form onSubmit={handleSubmit}>
-                <label htmlFor="customer">
-                    <input
+                <label htmlFor="customer" className="links">
+                    <textarea
                         id="customer"
-                        type="text"
-                        placeholder="Paste a menu URL"
+                        rows={5}
+                        placeholder={"Paste menu links, one per line"}
                         value={customerInput}
                         onChange={event => setCustomerInput(event.target.value)}
                         autoComplete="off"
@@ -86,7 +88,7 @@ export function SelectMenu({ onLoaded, initialValue = "" }: SelectMenuProps) {
                     />
                 </label>
                 <button type="submit" disabled={!customerInput.trim() || isLoading}>
-                    {isLoading ? <div className="framer-spinner" /> : "Next"}
+                    {isLoading ? <div className="framer-spinner" /> : linkCount > 1 ? `Load ${linkCount} menus` : "Next"}
                 </button>
             </form>
         </main>

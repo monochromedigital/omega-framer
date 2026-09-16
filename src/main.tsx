@@ -4,7 +4,7 @@ import { framer } from "@framer/plugin"
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 import { App } from "./App.tsx"
-import { parseImportConfig, PLUGIN_KEYS, syncExistingCollection } from "./data"
+import { readStoredSync, syncExistingCollection } from "./data"
 import { OpenFromCMS } from "./OpenFromCMS.tsx"
 
 function render(node: React.ReactNode) {
@@ -20,27 +20,13 @@ function render(node: React.ReactNode) {
 if (framer.mode === "syncManagedCollection" || framer.mode === "configureManagedCollection") {
     const activeCollection = await framer.getActiveManagedCollection()
 
-    const previousDataSourceId = await activeCollection.getPluginData(PLUGIN_KEYS.DATA_SOURCE_ID)
-    const previousMenuSource = await activeCollection.getPluginData(PLUGIN_KEYS.CUSTOMER_ID)
-    const previousImportConfig = await activeCollection.getPluginData(PLUGIN_KEYS.IMPORT_CONFIG)
-
-    const { didSync } = await syncExistingCollection(
-        activeCollection,
-        previousDataSourceId,
-        previousMenuSource,
-        previousImportConfig
-    )
+    const stored = await readStoredSync(activeCollection)
+    const { didSync } = await syncExistingCollection(activeCollection, stored)
 
     if (didSync) {
         framer.closePlugin("Synchronization successful", { variant: "success" })
     } else {
-        render(
-            <App
-                collection={activeCollection}
-                initialSource={previousMenuSource}
-                initialConfig={parseImportConfig(previousImportConfig)}
-            />
-        )
+        render(<App collection={activeCollection} stored={stored} />)
     }
 } else {
     render(<OpenFromCMS />)

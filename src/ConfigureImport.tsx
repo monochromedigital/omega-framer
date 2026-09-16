@@ -1,16 +1,34 @@
 import { framer, type ManagedCollection, useIsAllowedTo } from "@framer/plugin"
 import { useEffect, useMemo, useRef, useState } from "react"
-import { brandedCollectionName, type ImportConfig, importMenu, importMethods, type MenuPreview, previewCounts } from "./data"
-import type { SourceId } from "./lib/transform.js"
+import {
+    brandedCollectionName,
+    collectionPrefix,
+    type ImportConfig,
+    importMenu,
+    importMethods,
+    LEVEL_COLLECTION_NAME,
+    locationName,
+    type MenuPreview,
+    previewCounts,
+    scopedCategoryId,
+    scopedSectionId,
+    type StoredSync,
+} from "./data"
 
 interface ConfigureImportProps {
     collection: ManagedCollection
+    stored: StoredSync
     preview: MenuPreview
     initialConfig: ImportConfig
     onBack: () => void
 }
 
-export function ConfigureImport({ collection, preview, initialConfig, onBack }: ConfigureImportProps) {
+type ToggleLevel = keyof ImportConfig["levels"]
+const TOGGLE_LEVELS: readonly ToggleLevel[] = ["locations", "categories", "sections"]
+
+const PLATFORM_LABEL = { omega: "Omega", redro: "redro" } as const
+
+export function ConfigureImport({ collection, stored, preview, initialConfig, onBack }: ConfigureImportProps) {
     const [config, setConfig] = useState<ImportConfig>(initialConfig)
     const [isImporting, setIsImporting] = useState(false)
     const isAllowed = useIsAllowedTo(...importMethods)
@@ -28,48 +46,34 @@ export function ConfigureImport({ collection, preview, initialConfig, onBack }: 
     const excludedSecs = useMemo(() => new Set(config.excludedSectionIds), [config.excludedSectionIds])
     const counts = useMemo(() => previewCounts(preview, config), [preview, config])
 
-    // The active collection becomes "Menu Items" but the plugin can't rename it (Framer set its
-    // name, no rename API). If it doesn't match the {{Brand}}-{{Collection}} convention, suggest a
-    // manual rename in the CMS so it lines up with the Categories/Sections collections.
-    const categoriesName = brandedCollectionName(preview.brand, "Menu Categories")
-    const sectionsName = brandedCollectionName(preview.brand, "Menu Sections")
-    const itemsName = brandedCollectionName(preview.brand, "Menu Items")
-    const showRenameHint = preview.brand.trim() !== "" && collection.name !== itemsName
+    // The active collection keeps its level, but the plugin can't rename it (Framer set its name, no
+    // rename API). If it doesn't match the {{Prefix}}-{{Collection}} convention, suggest a manual
+    // rename in the CMS so it lines up with the collections the plugin creates.
+    const prefix = collectionPrefix(preview, config)
+    const expectedName = brandedCollectionName(prefix, LEVEL_COLLECTION_NAME[stored.level])
+    const showRenameHint = prefix.trim() !== "" && collection.name !== expectedName
 
-    const setLevel = (key: "categories" | "sections", value: boolean) =>
+    const setLevel = (key: ToggleLevel, value: boolean) =>
         setConfig(c => ({ ...c, levels: { ...c.levels, [key]: value } }))
 
-    const toggleCategory = (id: SourceId) =>
-        setConfig(c => {
-            const next = new Set(c.excludedCategoryIds)
-            if (next.has(id)) next.delete(id)
-            else next.add(id)
-            return { ...c, excludedCategoryIds: Array.from(next) }
-        })
+    const setLocationName = (key: string, value: string) =>
+        setConfig(c => ({ ...c, locationNames: { ...c.locationNames, [key]: value } }))
 
-    const toggleSection = (id: SourceId) =>
+    const toggle = (list: "excludedCategoryIds" | "excludedSectionIds", id: string) =>
         setConfig(c => {
-            const next = new Set(c.excludedSectionIds)
+            const next = new Set(c[list])
             if (next.has(id)) next.delete(id)
             else next.add(id)
-            return { ...c, excludedSectionIds: Array.from(next) }
+            return { ...c, [list]: Array.from(next) }
         })
 
     const setFlag = (key: keyof ImportConfig["itemFlags"], value: boolean) =>
         setConfig(c => ({ ...c, itemFlags: { ...c.itemFlags, [key]: value } }))
 
-    // Sections grouped under their category for the checklist.
-    const grouped = useMemo(() => {
-        return preview.categories.map(category => ({
-            category,
-            sections: preview.sections.filter(section => section.categoryId === category.id),
-        }))
-    }, [preview])
-
     const handleImport = async () => {
         try {
             setIsImporting(true)
-            await importMenu(collection, preview.source, config)
+            await importMenu(collection, stored, preview, config)
             if (!mountedRef.current) return
             framer.closePlugin("Menu imported successfully", { variant: "success" })
         } catch (error) {
@@ -80,74 +84,115 @@ export function ConfigureImport({ collection, preview, initialConfig, onBack }: 
         }
     }
 
+    const summary = [
+        config.levels.locations ? `${counts.locations} locations` : null,
+        config.levels.categories ? `${counts.categories} categories` : null,
+        config.levels.sections ? `${counts.sections} sections` : null,
+        `${counts.items} items`,
+    ]
+        .filter(Boolean)
+        .join(" · ")
+
     return (
         <main className="framer-hide-scrollbar configure">
             <div className="config-scroll">
                 <section>
-                    <h3>Levels</h3>
+                    <h3>Collections</h3>
                     <label className="row">
-                        <span>Menu Categories</span>
+                        <span>Name prefix</span>
                         <input
-                            type="checkbox"
-                            checked={config.levels.categories}
-                            onChange={e => setLevel("categories", e.target.checked)}
+                            type="text"
+                            value={prefix}
+                            placeholder="e.g. Amar"
+                            onChange={e => setConfig(c => ({ ...c, collectionPrefix: e.target.value }))}
                         />
                     </label>
-                    <label className="row">
-                        <span>Menu Sections</span>
-                        <input
-                            type="checkbox"
-                            checked={config.levels.sections}
-                            onChange={e => setLevel("sections", e.target.checked)}
-                        />
-                    </label>
+                    {TOGGLE_LEVELS.map(level => {
+                        // The collection the plugin was opened from always keeps its own level.
+                        const locked = stored.level === level
+                        return (
+                            <label key={level} className={`row ${locked ? "muted" : ""}`}>
+                                <span>{LEVEL_COLLECTION_NAME[level]}</span>
+                                <input
+                                    type="checkbox"
+                                    checked={locked || config.levels[level]}
+                                    disabled={locked}
+                                    onChange={e => setLevel(level, e.target.checked)}
+                                />
+                            </label>
+                        )
+                    })}
                     <label className="row muted">
                         <span>Menu Items</span>
                         <input type="checkbox" checked readOnly disabled />
                     </label>
                     {showRenameHint && (
                         <p className="hint">
-                            Tip: rename this collection to <code>{itemsName}</code> in the CMS to match{" "}
-                            <code>{categoriesName}</code> and <code>{sectionsName}</code>.
+                            Tip: rename this collection to <code>{expectedName}</code> in the CMS to match the others.
                         </p>
                     )}
                 </section>
 
                 <section>
-                    <h3>Categories</h3>
-                    {preview.categories.map(category => (
-                        <label key={category.id} className="row">
-                            <span>{category.name}</span>
+                    <h3>Locations</h3>
+                    {preview.locations.map(location => (
+                        <div key={location.key} className="location">
                             <input
-                                type="checkbox"
-                                checked={!excludedCats.has(category.id)}
-                                onChange={() => toggleCategory(category.id)}
+                                type="text"
+                                value={config.locationNames[location.key] ?? location.brand}
+                                placeholder={location.brand || location.key}
+                                onChange={e => setLocationName(location.key, e.target.value)}
                             />
-                        </label>
+                            <span className="meta">
+                                {PLATFORM_LABEL[location.platform]} · {location.items.length} items ·{" "}
+                                {location.currency}
+                            </span>
+                        </div>
                     ))}
                 </section>
 
                 <section>
-                    <h3>Sections</h3>
-                    {grouped.map(({ category, sections }) => {
-                        const categoryExcluded = excludedCats.has(category.id)
-                        return (
-                            <div key={category.id} className="group">
-                                <div className="group-label">{category.name}</div>
-                                {sections.map(section => (
-                                    <label key={section.omegaId} className={`row ${categoryExcluded ? "muted" : ""}`}>
-                                        <span>{section.title}</span>
-                                        <input
-                                            type="checkbox"
-                                            disabled={categoryExcluded}
-                                            checked={!categoryExcluded && !excludedSecs.has(section.omegaId)}
-                                            onChange={() => toggleSection(section.omegaId)}
-                                        />
-                                    </label>
-                                ))}
-                            </div>
-                        )
-                    })}
+                    <h3>Categories &amp; sections</h3>
+                    {preview.locations.map(location => (
+                        <div key={location.key} className="group">
+                            <div className="group-label">{locationName(location, config)}</div>
+                            {location.categories.map(category => {
+                                const categoryId = scopedCategoryId(location, category)
+                                const categoryExcluded = excludedCats.has(categoryId)
+                                return (
+                                    <div key={categoryId}>
+                                        <label className="row">
+                                            <span>{category.name}</span>
+                                            <input
+                                                type="checkbox"
+                                                checked={!categoryExcluded}
+                                                onChange={() => toggle("excludedCategoryIds", categoryId)}
+                                            />
+                                        </label>
+                                        {location.sections
+                                            .filter(section => section.categoryId === category.id)
+                                            .map(section => {
+                                                const sectionId = scopedSectionId(location, section)
+                                                return (
+                                                    <label
+                                                        key={sectionId}
+                                                        className={`row indent ${categoryExcluded ? "muted" : ""}`}
+                                                    >
+                                                        <span>{section.title}</span>
+                                                        <input
+                                                            type="checkbox"
+                                                            disabled={categoryExcluded}
+                                                            checked={!categoryExcluded && !excludedSecs.has(sectionId)}
+                                                            onChange={() => toggle("excludedSectionIds", sectionId)}
+                                                        />
+                                                    </label>
+                                                )
+                                            })}
+                                    </div>
+                                )
+                            })}
+                        </div>
+                    ))}
                 </section>
 
                 <section>
@@ -180,11 +225,7 @@ export function ConfigureImport({ collection, preview, initialConfig, onBack }: 
             </div>
 
             <footer>
-                <p className="summary">
-                    {config.levels.categories ? `${counts.categories} categories · ` : ""}
-                    {config.levels.sections ? `${counts.sections} sections · ` : ""}
-                    {counts.items} items
-                </p>
+                <p className="summary">{summary}</p>
                 <div className="actions">
                     <button type="button" className="secondary" onClick={onBack} disabled={isImporting}>
                         Back

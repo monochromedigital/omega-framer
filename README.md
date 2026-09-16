@@ -1,6 +1,6 @@
 # Restaurant Menu Import — Framer plugin
 
-Import a restaurant menu straight into Framer CMS — as a linked, nestable 3-level hierarchy.
+Import a restaurant menu straight into Framer CMS — as a linked, nestable hierarchy — one or many locations at once.
 
 Supported menu providers (dispatched on the URL host):
 
@@ -9,16 +9,18 @@ Supported menu providers (dispatched on the URL host):
 | **Omega Software's oMenu** | `menu.omegasoftware.ca/{customerid}` | JSON API, USD default |
 | **redro.menu** | `{venue}.redro.menu/{locale}/restaurant/{location}.html` | SAR default; adds item **photos** + **calories** |
 
-Paste a menu URL (or an Omega customer id), choose exactly what to sync, and the plugin creates
-and populates three managed collections in one import:
+Paste one or more menu links (one per line — Omega and redro can be mixed), choose exactly what to
+sync, and the plugin creates and populates one set of managed collections for all of them:
 
-**Menu Categories → Menu Sections → Menu Items**
+**Menu Locations → Menu Categories → Menu Sections → Menu Items**
+
+Each menu becomes a Location, so a single page template on Menu Locations renders every venue.
 
 ## Features
 
-- **One-click import** of the full menu into three plugin-managed collections, named after the
-  venue: `{{Brand}}-Menu Categories`, `{{Brand}}-Menu Sections`, `{{Brand}}-Menu Items`.
-- **3-level hierarchy, linked both ways** — child→parent references *and* parent→children
+- **One-click import** of every menu into four plugin-managed collections with a shared prefix:
+  `{{Prefix}}-Menu Locations`, `-Menu Categories`, `-Menu Sections`, `-Menu Items`.
+- **4-level hierarchy, linked both ways** — child→parent references *and* parent→children
   multi-references, so you can nest Collection Lists (source an inner list from *Current
   Item's Sections / Items*).
 - **Selective import** — toggle which levels to create, pick which categories/sections to
