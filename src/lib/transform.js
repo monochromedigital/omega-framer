@@ -97,6 +97,7 @@ export function transform(data) {
                     popular: item.POPULAR !== 0,
                     newItem: item.NEWITEM !== 0,
                     image: itemImage(item),
+                    branchCode: code || "", // the branch whose group the item sits in ("SS")
                     sortOrder: iIdx + 1,
                 })
             })

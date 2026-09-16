@@ -70,6 +70,9 @@ numbers), and `Currency` (plain text) fields; image/calories are written only wh
 - **Omega data quirk:** each branch's menu also lists ~23 items grouped under OTHER branches'
   codes (e.g. Harissa shows `CHICKEN BAO-SS`; Omega's own public page does too). Once codes are
   stripped these can look like duplicates within a branch (31 across the Amar branches).
+  Items therefore carry **Branch Code** (group-name prefix, "" for redro) and **Other Branch**
+  (code ≠ the location's own code = its most common one). Filtering a list on Other Branch = off
+  shows only a branch's own items — one static filter that works on the shared Locations template.
 - **Menu links from a branches collection (optional).** Instead of pasting links, the setup screen
   can read a user-created collection (`framer.getCollections()` filtered to `managedBy === "user"`):
   the user picks the Link/Plain Text field holding the menu link and the Plain Text name field.
