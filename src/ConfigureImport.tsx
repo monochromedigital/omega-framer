@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import {
     brandedCollectionName,
     collectionPrefix,
+    displayName,
     type ImportConfig,
     importMenu,
     importMethods,
@@ -174,7 +175,7 @@ export function ConfigureImport({ collection, stored, preview, initialConfig, on
                                 return (
                                     <div key={categoryId}>
                                         <label className="row">
-                                            <span>{category.name}</span>
+                                            <span>{displayName(category.name, location, config)}</span>
                                             <input
                                                 type="checkbox"
                                                 checked={!categoryExcluded}
@@ -190,7 +191,7 @@ export function ConfigureImport({ collection, stored, preview, initialConfig, on
                                                         key={sectionId}
                                                         className={`row indent ${categoryExcluded ? "muted" : ""}`}
                                                     >
-                                                        <span>{section.title}</span>
+                                                        <span>{displayName(section.title, location, config)}</span>
                                                         <input
                                                             type="checkbox"
                                                             disabled={categoryExcluded}
@@ -209,6 +210,17 @@ export function ConfigureImport({ collection, stored, preview, initialConfig, on
 
                 <section>
                     <h3>Item filters</h3>
+                    <label
+                        className="row"
+                        title="Title Case every name, remove branch codes like “-SS”, spell out BTL/GLS/PCS"
+                    >
+                        <span>Clean up names</span>
+                        <input
+                            type="checkbox"
+                            checked={config.cleanNames}
+                            onChange={e => setConfig(c => ({ ...c, cleanNames: e.target.checked }))}
+                        />
+                    </label>
                     <label className="row">
                         <span>Only popular items</span>
                         <input

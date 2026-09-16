@@ -57,9 +57,19 @@ numbers), and `Currency` (plain text) fields; image/calories are written only wh
   second import overwrite the first one's collections. Legacy single-menu collections have no
   groupId; their `customerId` acts as the group key and is cleared after the next sync.
 - **Location-scoped ids.** Menu ids are only unique per venue (Omega branches share section ids;
-  redro locations share category/section slugs), so every row id is `{locationKey}:{menuId}`
-  and slugs are prefixed with the location slug. `locationKey` = Omega customer id, or
-  `{sub}-{location}` for redro.
+  redro locations share category/section slugs), so every row id is `{locationKey}:{menuId}`.
+  `locationKey` = Omega customer id, or `{sub}-{location}` for redro.
+- **Readable slugs** (`src/lib/names.ts`): `{location-slug}-{name}` from the (cleaned) name, no
+  ids. Clashes within a collection get `-2`, `-3`… assigned in **id order**, so menu re-ordering
+  doesn't swap URLs. Trade-off: renaming a dish in the POS changes its slug (row id is stable).
+- **Name cleanup** (`cleanNames`, default on): Title Case every name (joiners like de/du/bel/el/
+  with stay lower; JW/VSOP/J&B stay upper; hand-typed inner capitals kept), strip Omega branch
+  codes (`-HA`/`-SS`/`-DT` — only the codes found in the menu's group-name prefixes, surfaced by
+  `transform` as `branchCodes`), drop wine-list `W.`/`R.` prefixes, BTL/GLS/5PCS → (Bottle)/
+  (Glass)/(5 pcs). Descriptions are untouched. Redro links' trailing `#` is stripped.
+- **Omega data quirk:** each branch's menu also lists ~23 items grouped under OTHER branches'
+  codes (e.g. Harissa shows `CHICKEN BAO-SS`; Omega's own public page does too). Once codes are
+  stripped these can look like duplicates within a branch (31 across the Amar branches).
 - **Menu links from a branches collection (optional).** Instead of pasting links, the setup screen
   can read a user-created collection (`framer.getCollections()` filtered to `managedBy === "user"`):
   the user picks the Link/Plain Text field holding the menu link and the Plain Text name field.
