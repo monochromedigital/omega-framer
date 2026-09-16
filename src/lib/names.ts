@@ -3,7 +3,7 @@
  *
  * Omega names come straight from the restaurant's POS: ALL CAPS ("KSARA SUNSET BTL"), with the
  * branch code of the group they were created in ("CHICKEN BAO-SS"), POS abbreviations (BTL, GLS,
- * 5PCS) and wine-list prefixes ("W.CHABLIS", "R.MICHEL LYNCH"). Every name ends up in Title Case
+ * 5PCS) and wine-colour prefixes ("W.CHABLIS", "R-PINOT GRIGIO" → "Chablis (White)"). Every name ends up in Title Case
  * ("On The Grill" → "On the Grill"); in names that aren't shouted, words with deliberate inner
  * capitals ("McDonald's", "iPhone") are left as typed.
  */
@@ -78,15 +78,20 @@ export function cleanMenuName(name: string, branchCodes: readonly string[] = [])
     for (const code of branchCodes) {
         text = text.replace(new RegExp(`\\s*-\\s*${code}$`, "i"), "")
     }
-    // Wine-list colour prefixes: "W.CHABLIS …" / "R.MICHEL LYNCH".
-    text = text.replace(/^[WR]\.\s*(?=\S)/, "")
+    // Wine colour prefixes "W.CHABLIS" / "R.MICHEL LYNCH" / "R-PINOT GRIGIO" become a "(White)"/"(Red)"
+    // suffix, so a white and a red of the same wine don't end up with identical names.
+    let colour = ""
+    text = text.replace(/^([WR])(?:\.\s*|-)(?=[A-Za-z])/i, (_, letter: string) => {
+        colour = letter.toUpperCase() === "W" ? " (White)" : " (Red)"
+        return ""
+    })
 
     // Title Case first, so the readable suffixes below keep their own casing. Shouted POS names are
     // fully re-cased; hand-typed names keep words with deliberate inner capitals.
     text = titleCase(text, !isMostlyUpper(text))
 
     // POS abbreviations → readable suffixes.
-    return text
+    return (text + colour)
         .replace(/\s*\b(\d+)\s*PCS\b\.?/i, " ($1 pcs)")
         .replace(/\s*\bBTL\b\.?/i, " (Bottle)")
         .replace(/\s*\bGLS\b\.?/i, " (Glass)")

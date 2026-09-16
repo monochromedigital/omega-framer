@@ -65,7 +65,7 @@ numbers), and `Currency` (plain text) fields; image/calories are written only wh
 - **Name cleanup** (`cleanNames`, default on): Title Case every name (joiners like de/du/bel/el/
   with stay lower; JW/VSOP/J&B stay upper; hand-typed inner capitals kept), strip Omega branch
   codes (`-HA`/`-SS`/`-DT` — only the codes found in the menu's group-name prefixes, surfaced by
-  `transform` as `branchCodes`), drop wine-list `W.`/`R.` prefixes, BTL/GLS/5PCS → (Bottle)/
+  `transform` as `branchCodes`), turn wine-colour prefixes (`W.`/`R.`/`R-`) into `(White)`/`(Red)` suffixes, BTL/GLS/5PCS → (Bottle)/
   (Glass)/(5 pcs). Descriptions are untouched. Redro links' trailing `#` is stripped.
 - **Omega data quirk:** each branch's menu also lists ~23 items grouped under OTHER branches'
   codes (e.g. Harissa shows `CHICKEN BAO-SS`; Omega's own public page does too). Once codes are
