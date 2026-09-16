@@ -37,6 +37,8 @@ export interface MenuItem {
     newItem: boolean
     /** Item photo URL ("" when none). Omega venues carry no photos; redro fills from detail pages. */
     image: string
+    /** Omega branch code of the item's group ("HA"/"SS"/"DT"); absent/"" for redro. */
+    branchCode?: string
     /** Calories as a number (redro); absent for Omega (its values are all 0 → left empty). */
     calories?: number | null
     sortOrder: number

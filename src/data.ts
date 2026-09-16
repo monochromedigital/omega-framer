@@ -481,6 +481,10 @@ interface ItemRow {
     id: string
     slug: string
     title: string
+    /** Omega branch code of the item's group ("" for redro). */
+    branchCode: string
+    /** Grouped under another branch's code than this location's own (its most common code). */
+    otherBranch: boolean
     item: MenuItem
     currency: string
     locationId: string
@@ -550,12 +554,22 @@ function flatten(preview: MenuPreview, config: ImportConfig): MenuRows {
                 sortOrder: section.sortOrder,
             })
         }
+        // A branch's own code is the one most of its items are grouped under (Harissa: 157 "HA" vs
+        // 11 "SS" / 12 "DT"); items under any other code were created for another branch.
+        const codeCounts = new Map<string, number>()
+        for (const item of location.items) {
+            if (item.branchCode) codeCounts.set(item.branchCode, (codeCounts.get(item.branchCode) ?? 0) + 1)
+        }
+        const ownCode = [...codeCounts].sort((a, b) => b[1] - a[1])[0]?.[0] ?? ""
         for (const item of location.items) {
             const title = clean(item.title)
+            const branchCode = item.branchCode ?? ""
             rows.items.push({
                 id: scoped(item.omegaId),
                 slug: slugFor(title, "item"),
                 title,
+                branchCode,
+                otherBranch: Boolean(branchCode && ownCode && branchCode !== ownCode),
                 item,
                 currency: location.currency,
                 locationId,
@@ -679,6 +693,10 @@ function fieldsFor(level: Level, ids: CollectionIds): ManagedCollectionFieldInpu
             { id: "image", name: "Image", type: "image" },
             { id: "popular", name: "Popular", type: "boolean" },
             { id: "newItem", name: "New", type: "boolean" },
+            // Omega groups items by branch code; items from another branch's groups show up in every
+            // branch's menu. Filter a list on "Other Branch" = off to show only the branch's own items.
+            { id: "branchCode", name: "Branch Code", type: "string" },
+            { id: "otherBranch", name: "Other Branch", type: "boolean" },
             { id: "sortOrder", name: "Sort Order", type: "number" },
         ],
     }
@@ -774,6 +792,8 @@ function cmsItems(
                     currency: str(row.currency),
                     popular: bool(item.popular),
                     newItem: bool(item.newItem),
+                    branchCode: str(row.branchCode),
+                    otherBranch: bool(row.otherBranch),
                     sortOrder: num(item.sortOrder),
                 }
                 if (typeof item.price === "number") fieldData.price = num(item.price)
